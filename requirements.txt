@@ -1,0 +1,6 @@
+llama-index
+python-dotenv
+llama-index-llms-ollama
+llama-index-embeddings-huggingface
+llama-index-graph-stores-nebula
+jupyter-nebulagraph

@@ -1,0 +1,9 @@
+/.DS_Store
+/.env
+/.github
+/.venv
+/.devcontainer/data
+/data
+/docker-composenebula-graph.yaml
+/docs
+/nebulagraph_cell_19.html

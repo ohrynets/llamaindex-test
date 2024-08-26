@@ -4,3 +4,14 @@ llama-index-llms-ollama
 llama-index-embeddings-huggingface
 llama-index-graph-stores-nebula
 jupyter-nebulagraph
+pymupdf4llm
+llama-index-embeddings-ollama
+torch
+torchvision
+torchaudio
+chromadb
+llama-index-vector-stores-qdrant
+llama-index-vector-stores-chroma
+open-clip-torch
+sentence-transformers
+pydantic

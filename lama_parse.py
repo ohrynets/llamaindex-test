@@ -67,7 +67,8 @@ mrkdown_parser = MarkdownNodeParser()
 class PdfFileReader(BaseReader):
 
     def load_data(self, file, extra_info={}):
-        md_content = pymupdf4llm.to_markdown(file, write_images=True, page_chunks=True, image_path=pdf_images_path)
+        md_content = pymupdf4llm.to_markdown(file, write_images=True, page_chunks=True, image_path=".pdf_images/")
+
         # load_data returns a list of Document objects
         nodes = []
         for d in md_content:

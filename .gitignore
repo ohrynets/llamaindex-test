@@ -3,6 +3,9 @@
 /.github
 /.venv
 /.devcontainer/data
+/.pdf_images
+/model
+/storage
 /data
 /docker-composenebula-graph.yaml
 /docs

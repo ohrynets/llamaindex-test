@@ -8,12 +8,20 @@ services:
       dockerfile: Dockerfile
     environment:
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - HF_HOME=/workspace/model
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128,expandable_segments:True
     volumes:
       - ../:/workspace
-      - /Users/oleggrynets/Library/Mobile Documents/com~apple~CloudDocs/Documents/English-Michelle:/mnt/docs
+      - /home/grinia/Documents/English-Michelle:/mnt/docs
     command: sleep infinity
     networks:
       - langindex-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    runtime: nvidia
   db:
     image: postgres:13
     environment:

@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from llama_index.core.agent import ReActAgent
 from llama_index.llms.openai import OpenAI
-from llama_index.core.tools import FunctionTool
+from llama_index.core.base.base_query_engine import BaseQueryEngine
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, Settings
 from llama_index.llms.ollama import Ollama
 import os
@@ -21,6 +21,18 @@ from llama_index.core import SimpleDirectoryReader, StorageContext
 from chromadb.utils.data_loaders import ImageLoader
 import chromadb
 from llama_index.core.node_parser.file.markdown import MarkdownNodeParser
+from llama_index.llms.llama_cpp import LlamaCPP
+from llama_index.llms.llama_cpp.llama_utils import (
+    messages_to_prompt_v3_instruct,
+    completion_to_prompt_v3_instruct,
+)
+from llama_index.llms.vllm import Vllm
+from llama_index.core.llms import ChatMessage
+from vllm.config import (CacheConfig, DecodingConfig, DeviceConfig,
+                         EngineConfig, LoadConfig, LoRAConfig, ModelConfig,
+                         ObservabilityConfig, ParallelConfig,
+                         PromptAdapterConfig, SchedulerConfig,
+                         SpeculativeConfig)
 
 # set defalut text and image embedding functions
 embedding_function = OpenCLIPEmbeddingFunction()
@@ -33,9 +45,6 @@ class PdfFileReader(BaseReader):
         # load_data returns a list of Document objects
         nodes = []
         for d in md_content:
-            res = mrkdown_parser.aget_nodes_from_documents(d)
-            for n in res:
-                print(n)
             doc_id = f"{d['metadata']['title']}:{d['metadata']['page']}"
             doc = Document(text=d['text'], id_=doc_id, extra_info={**extra_info, **d['metadata']})
             nodes.append(doc)
@@ -47,9 +56,32 @@ class PdfFileReader(BaseReader):
 #Settings.llm = OpenAI(model="gpt-3.5-turbo", temperature=0)
 ollama_base_url=os.environ['OLLAMA_BASE_URL']
 ollama = Ollama(model="llama3.1:8b", request_timeout=120.0, base_url=ollama_base_url)
+model_8B_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf"
+model_70B_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-70B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-70B-Instruct-Q3_K_S.gguf"                                                                                     
+llama_cpp = LlamaCPP(
+    # You can pass in the URL to a GGML model to download it automatically
+    model_url=model_8B_url,
+    # optionally, you can set the path to a pre-downloaded model instead of model_url
+    model_path=None, 
+    temperature=0.5,
+    max_new_tokens=1024,
+    # llama2 has a context window of 4096 tokens, but we set it lower to allow for some wiggle room
+    #context_window=3900,
+    context_window=4096,
+    # kwargs to pass to __call__()
+    generate_kwargs={},
+    # kwargs to pass to __init__()
+    # set to at least 1 to use GPU
+    model_kwargs={"n_gpu_layers": 33},
+    # transform inputs into Llama2 format
+    messages_to_prompt=messages_to_prompt_v3_instruct,
+    completion_to_prompt=completion_to_prompt_v3_instruct,
+    verbose=False,
+)
+
 ollama_embeding = OllamaEmbedding(model_name="nomic-embed-text", request_timeout=120.0, base_url=ollama_base_url, ollama_additional_kwargs={"mirostat": 0},)
-hf_embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
-Settings.llm = ollama
+hf_embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5", device="cuda")
+Settings.llm = llama_cpp
 Settings.embed_model = hf_embed_model
 #Settings.llm = OpenAI(model="gpt-3.5-turbo", temperature=0)
 # set up parser
@@ -92,4 +124,25 @@ print(index.summary)
 retriever = index.as_retriever(verbose=True)
 response = retriever.retrieve("new neighbor behaved churlishly ")
 for res in response:
-    print(res.text)
+    print(res)
+
+
+def query(query_engine, query: BaseQueryEngine):
+    response = query_engine.query(query)
+    print(response)
+
+query_engine = index.as_query_engine(streaming=True, response_mode="refine", verbose=True)
+query(query_engine,
+      '''
+        Give me all the Tongue Twisters from all documents in the context.
+        Don't use previous knowledge, only information from the context.
+        Format the response in Markdown format.
+      ''')
+#.print_response_stream()
+print("")
+query(query_engine,
+      '''
+        Give me tyhe list of all documents with Tongue Twisters.
+        Don't use previous knowledge, only information from the context.
+        Format the response in Markdown format.
+      ''')

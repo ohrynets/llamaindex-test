@@ -1,5 +1,7 @@
 # Use the official Ubuntu 22.04 (Jammy) as the base image
-FROM ubuntu:22.04
+#FROM ubuntu:22.04
+#FROM nvidia/cuda:12.6.0-cudnn-devel-ubuntu22.04
+FROM nvidia/cuda:12.6.0-cudnn-devel-ubuntu22.04
 
 # Set environment variables to avoid user interaction during package installation
 ENV DEBIAN_FRONTEND=noninteractive

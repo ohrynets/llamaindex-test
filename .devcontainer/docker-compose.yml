@@ -9,21 +9,13 @@ services:
       dockerfile: Dockerfile
     environment:
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
-      - LANGFUSE_URL=http://langfuse:3000
+      - HF_HOME=/workspace/model
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128,expandable_segments:True
     volumes:
-      - type: bind
-        source: ..
-        target: /workspace
-      - type: bind
-        source: /Users/Oleh_Hrynets/Library/CloudStorage/OneDrive-EPAM/Data_Archive
-        target: /mnt/docs
+      - ../:/workspace
+      - /Users/oleggrynets/Library/Mobile Documents/com~apple~CloudDocs/Documents/English-Michelle:/mnt/docs
     command: sleep infinity
     networks:
       - langindex-net
-
 networks:
   langindex-net:
-
-volumes:
-  database_data:
-    driver: local

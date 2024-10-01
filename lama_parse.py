@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from llama_index.core.agent import ReActAgent
 from llama_index.llms.openai import OpenAI
-from llama_index.core.tools import FunctionTool
+from llama_index.core.base.base_query_engine import BaseQueryEngine
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, Settings
 from llama_index.llms.ollama import Ollama
 import os
@@ -21,45 +21,19 @@ from llama_index.core import SimpleDirectoryReader, StorageContext
 from chromadb.utils.data_loaders import ImageLoader
 import chromadb
 from llama_index.core.node_parser.file.markdown import MarkdownNodeParser
-from llama_index.core.base.base_query_engine import BaseQueryEngine
-from llama_index.core.ingestion import IngestionPipeline
-from llama_index.core.schema import TransformComponent
-from llama_index.core.schema import ImageNode
-from llama_index.core.schema import ImageDocument
-import re
-from llama_index.core.callbacks import CallbackManager
-from langfuse.llama_index import LlamaIndexCallbackHandler
-from llama_index.readers.file import ImageTabularChartReader
-from llama_index.readers.file import ImageReader
-from llama_index.readers.file import ImageVisionLLMReader
-from llama_index.postprocessor.cohere_rerank import CohereRerank
-from llama_index.core.response.pprint_utils import pprint_response
 from llama_index.llms.llama_cpp import LlamaCPP
 from llama_index.llms.llama_cpp.llama_utils import (
     messages_to_prompt_v3_instruct,
     completion_to_prompt_v3_instruct,
 )
-import uuid
+from llama_index.llms.vllm import Vllm
+from llama_index.core.llms import ChatMessage
+from vllm.config import (CacheConfig, DecodingConfig, DeviceConfig,
+                         EngineConfig, LoadConfig, LoRAConfig, ModelConfig,
+                         ObservabilityConfig, ParallelConfig,
+                         PromptAdapterConfig, SchedulerConfig,
+                         SpeculativeConfig)
 
-ollama_base_url=os.environ['OLLAMA_BASE_URL']
-pdf_images_path=os.environ['PDF_IMAGES_STORE_PATH']
-docs_store_path=os.environ['DOCS_STORE_PATH']
-langfuse_url = os.environ['LANGFUSE_URL']
-langfuse_public_key = os.environ['LANGFUSE_PUBLIC_KEY']
-langfuse_secret_key = os.environ['LANGFUSE_SECRET_KEY']
-storage_dir = os.environ['STORAGE_DIR']
-#Configure 
-session_id = str(uuid.uuid4())
-print(f"Session_id: {session_id}")
-langfuse_callback_handler = LlamaIndexCallbackHandler(
-    public_key=langfuse_public_key,
-    secret_key=langfuse_secret_key,
-    host=langfuse_url,
-    session_id=session_id,
-    debug=False,
-)
-
-Settings.callback_manager = CallbackManager([langfuse_callback_handler])
 # set defalut text and image embedding functions
 embedding_function = OpenCLIPEmbeddingFunction()
 nest_asyncio.apply()
@@ -72,9 +46,6 @@ class PdfFileReader(BaseReader):
         # load_data returns a list of Document objects
         nodes = []
         for d in md_content:
-            # res = mrkdown_parser.aget_nodes_from_documents(d)
-            # for n in res:
-                # print(n)
             doc_id = f"{d['metadata']['title']}:{d['metadata']['page']}"
             doc = Document(text=d['text'], id_=doc_id, extra_info={**extra_info, **d['metadata']})
             nodes.append(doc)
@@ -128,8 +99,32 @@ llama_cpp = LlamaCPP(
 #print(f"OLLAMA_BASE_URL:{ollama_base_url}")
 #Settings.llm = OpenAI(model="gpt-3.5-turbo", temperature=0)
 ollama = Ollama(model="llama3.1:8b", request_timeout=120.0, base_url=ollama_base_url)
-hf_embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
-Settings.llm = ollama
+model_8B_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf"
+model_70B_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-70B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-70B-Instruct-Q3_K_S.gguf"                                                                                     
+llama_cpp = LlamaCPP(
+    # You can pass in the URL to a GGML model to download it automatically
+    model_url=model_8B_url,
+    # optionally, you can set the path to a pre-downloaded model instead of model_url
+    model_path=None, 
+    temperature=0.5,
+    max_new_tokens=1024,
+    # llama2 has a context window of 4096 tokens, but we set it lower to allow for some wiggle room
+    #context_window=3900,
+    context_window=4096,
+    # kwargs to pass to __call__()
+    generate_kwargs={},
+    # kwargs to pass to __init__()
+    # set to at least 1 to use GPU
+    model_kwargs={"n_gpu_layers": 33},
+    # transform inputs into Llama2 format
+    messages_to_prompt=messages_to_prompt_v3_instruct,
+    completion_to_prompt=completion_to_prompt_v3_instruct,
+    verbose=False,
+)
+
+ollama_embeding = OllamaEmbedding(model_name="nomic-embed-text", request_timeout=120.0, base_url=ollama_base_url, ollama_additional_kwargs={"mirostat": 0},)
+hf_embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5", device="cuda")
+Settings.llm = llama_cpp
 Settings.embed_model = hf_embed_model
 #Settings.llm = OpenAI(model="gpt-3.5-turbo", temperature=0)
 # set up parser
@@ -172,21 +167,25 @@ else:
 retriever = index.as_retriever(verbose=True)
 response = retriever.retrieve("Give me the address of Homewood Suites by Hilton. Do not guess only use context.")
 for res in response:
-    print(res.text)
+    print(res)
 
-def run_query(query_engine: BaseQueryEngine, query):
-    return query_engine.query(query)
 
-query_engine = index.as_query_engine(verbose=True)
-pprint_response(run_query(query_engine=query_engine,
-                          query="Give me the address of Homewood Suites by Hilton. Do not guess only use context."),
-                         show_source=True)
-pprint_response(run_query(query_engine=query_engine,
-                          query="Give me the total cost excluding charges of stay in Homewood Suites by Hilton based on available folios. Do not guess only use context."),
-                          show_source=True)
-pprint_response(run_query(query_engine=query_engine,
-                          query="My name is Oleg Grynets. How many times I stayed in Hilton - Philadelphia Plymouth Meeting. Do not guess only use context. Please provide the clear answer first and the jsutification as additional information later."),
-                          show_source=True)
-pprint_response(run_query(query_engine=query_engine,
-                          query="Return all Markdown links to images per document in the collection. Do not guess only use context."),
-                          show_source=True)
+def query(query_engine, query: BaseQueryEngine):
+    response = query_engine.query(query)
+    print(response)
+
+query_engine = index.as_query_engine(streaming=True, response_mode="refine", verbose=True)
+query(query_engine,
+      '''
+        Give me all the Tongue Twisters from all documents in the context.
+        Don't use previous knowledge, only information from the context.
+        Format the response in Markdown format.
+      ''')
+#.print_response_stream()
+print("")
+query(query_engine,
+      '''
+        Give me tyhe list of all documents with Tongue Twisters.
+        Don't use previous knowledge, only information from the context.
+        Format the response in Markdown format.
+      ''')

@@ -44,19 +44,25 @@ If you do not know the answer to a question, respond by saying \
 """
 
 class PdfFileReader(BaseReader):
-    def __init__(self, pdf_images_path: str):
+    def __init__(self, pdf_images_path: str, page_chunks: bool = False):
        self.pdf_images_path = pdf_images_path
+       self.page_chunks = page_chunks
        
     def load_data(self, file, extra_info={}):
-        md_content = pymupdf4llm.to_markdown(file, write_images=True, page_chunks=True, image_path=self.pdf_images_path)
+        md_content = pymupdf4llm.to_markdown(file, write_images=True, page_chunks=self.page_chunks, image_path=self.pdf_images_path)
         # load_data returns a list of Document objects
         nodes = []
-        for d in md_content:
-            # res = mrkdown_parser.aget_nodes_from_documents(d)
-            # for n in res:
-                # print(n)
-            doc_id = f"{d['metadata']['title']}:{d['metadata']['page']}"
-            doc = Document(text=d['text'], id_=doc_id, extra_info={**extra_info, **d['metadata']})
+        if self.page_chunks:
+            for d in md_content:
+                # res = mrkdown_parser.aget_nodes_from_documents(d)
+                # for n in res:
+                    # print(n)
+                doc_id = f"{d['metadata']['title']}:{d['metadata']['page']}"
+                doc = Document(text=d['text'], id_=doc_id, extra_info={**extra_info, **d['metadata']})
+                nodes.append(doc)
+        else:
+            doc_id = f"{file}"
+            doc = Document(text=md_content, id_=doc_id)                
             nodes.append(doc)
         return nodes
 
@@ -116,15 +122,8 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
             tools=query_engine_tools, llm=agent_llm, verbose=self.verbose
         )
         
-
         self.main_agent = ReActAgentWorker.from_tools(tools=query_engine_tools, llm=main_llm,
              verbose=self.verbose
-        )
-    
-        introspective_agent_worker = IntrospectiveAgentWorker.from_defaults(
-            reflective_agent_worker=self.tool_interactive_reflection_agent_worker,
-            main_agent_worker=self.main_agent,
-            verbose=verbose
         )
 
         chat_history = [

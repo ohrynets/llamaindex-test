@@ -42,6 +42,7 @@ class PdfFileReader(BaseReader):
 
     def load_data(self, file, extra_info={}):
         md_content = pymupdf4llm.to_markdown(file, write_images=True, page_chunks=True, image_path=".pdf_images/")
+
         # load_data returns a list of Document objects
         nodes = []
         for d in md_content:
@@ -50,11 +51,53 @@ class PdfFileReader(BaseReader):
             nodes.append(doc)
         return nodes
 
-# settings
+class ImageExtractor(TransformComponent):
 
+    def __call__(self, nodes, **kwargs):
+        pattern = r'!\[.*?\]\((.*?)\)'
+        #loaderTabular = ImageTabularChartReader(keep_image=True)
+        #loader = ImageVisionLLMReader(keep_image=True)
+        loader = ImageReader(keep_image=True, text_type="plain_text")
+        images = []
+        for node in nodes:
+            images.append(node)
+            image_pathes = re.findall(pattern=pattern, string=node.text)
+            for image_path in image_pathes:
+                print(image_path)
+                #imgs = loaderTabular.load_data(image_path)
+                #images.extend(imgs)
+                imgs = loader.load_data(image_path)
+                for img in imgs:
+                    if img.text is not None and len(img.text) > 0:
+                        images.append(img)
+        return images
+     
+    
+# settings
+model_8B_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf"
+model_70B_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-70B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-70B-Instruct-Q3_K_S.gguf"                                                                                     
+llama_cpp = LlamaCPP(
+    # You can pass in the URL to a GGML model to download it automatically
+    model_url=model_8B_url,
+    # optionally, you can set the path to a pre-downloaded model instead of model_url
+    model_path=None, 
+    temperature=0.5,
+    max_new_tokens=1024,
+    # llama2 has a context window of 4096 tokens, but we set it lower to allow for some wiggle room
+    #context_window=3900,
+    context_window=4096,
+    # kwargs to pass to __call__()
+    generate_kwargs={},
+    # kwargs to pass to __init__()
+    # set to at least 1 to use GPU
+    model_kwargs={"n_gpu_layers": 33},
+    # transform inputs into Llama2 format
+    messages_to_prompt=messages_to_prompt_v3_instruct,
+    completion_to_prompt=completion_to_prompt_v3_instruct,
+    verbose=True,
+)
 #print(f"OLLAMA_BASE_URL:{ollama_base_url}")
 #Settings.llm = OpenAI(model="gpt-3.5-turbo", temperature=0)
-ollama_base_url=os.environ['OLLAMA_BASE_URL']
 ollama = Ollama(model="llama3.1:8b", request_timeout=120.0, base_url=ollama_base_url)
 model_8B_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf"
 model_70B_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-70B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-70B-Instruct-Q3_K_S.gguf"                                                                                     
@@ -93,8 +136,6 @@ file_extractor={".pdf": PdfFileReader()}
 # load it again to confirm it worked
 from llama_index.core import StorageContext, load_index_from_storage
 
-
-
 image_loader = ImageLoader()
 
 # create client and a new collection
@@ -106,23 +147,25 @@ chroma_collection = chroma_client.create_collection(
 )
 
 #if directory exists, load the index from storage
-if os.path.exists("./storage"):
+if os.path.exists(storage_dir):
     index = load_index_from_storage(
-        StorageContext.from_defaults(persist_dir="./storage")
+        StorageContext.from_defaults(persist_dir=storage_dir)
     )
 else:
-    reader = SimpleDirectoryReader(input_dir="/mnt/docs", file_extractor=file_extractor).load_data(show_progress=True)
-    index = VectorStoreIndex.from_documents(reader, show_progress=True)
+    reader = SimpleDirectoryReader(input_dir=docs_store_path, file_extractor=file_extractor).load_data(show_progress=True)
+    transformations=[   
+        ImageExtractor(),
+    ]
+    index = VectorStoreIndex.from_documents(reader, transformations=transformations, show_progress=True)
     print("ref_docs ingested: ", len(index.ref_doc_info))
     print("number of input documents: ", len(reader))    
     # save the initial index
-    index.storage_context.persist(persist_dir="./storage")
+    index.storage_context.persist(persist_dir=storage_dir)
 
 # Check if embedding model is loaded correctly
-print(index.summary)
     
 retriever = index.as_retriever(verbose=True)
-response = retriever.retrieve("new neighbor behaved churlishly ")
+response = retriever.retrieve("Give me the address of Homewood Suites by Hilton. Do not guess only use context.")
 for res in response:
     print(res)
 

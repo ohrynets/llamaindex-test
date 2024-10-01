@@ -70,10 +70,6 @@ class PdfFileReader(BaseReader):
 class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
     """Multi-document Agents pack.
 
-    Given a set of documents, build our multi-document agents architecture.
-    - setup a document agent over agent doc (capable of QA and summarization)
-    - setup a top-level agent over doc agents
-
     """
 
     def __init__(
@@ -102,7 +98,7 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
                 StorageContext.from_defaults(persist_dir=storage_dir)
             )
         else:
-            reader = SimpleDirectoryReader(input_dir=docs_store_path, file_extractor=file_extractor).load_data(show_progress=True)
+            reader = self.process_documets(docs_store_path)
             transformations=[   
                 embeding_llm
             ]
@@ -113,7 +109,7 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         self.vector_index.storage_context.persist(persist_dir=storage_dir)
         query_engine_tools = [
                 QueryEngineTool (
-                    query_engine=self.vector_index.as_query_engine(llm=agent_llm, similarity_top_k=3),
+                    query_engine=self.vector_index.as_query_engine(llm=agent_llm, similarity_top_k=5),
                     metadata=ToolMetadata(
                         name="vector_tool",
                         description="Useful to answer question based on relevant documents. " \
@@ -137,6 +133,11 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
             )
         ]
         self.top_agent = self.main_agent.as_agent(chat_history=chat_history, verbose=verbose)
+
+    def process_documets(self, docs_store_path):
+        file_extractor={".pdf": PdfFileReader(self.pdf_images_path)}
+        reader = SimpleDirectoryReader(input_dir=docs_store_path, file_extractor=file_extractor).load_data(show_progress=True)
+        return reader
 
     def get_modules(self) -> Dict[str, Any]:
         """Get modules."""

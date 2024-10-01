@@ -45,11 +45,11 @@ agent = MultiDocumentAssistantAgentsPack(main_llm=ollama, agent_llm=ollama_agent
                                          embeding_llm=embed_model, 
                                          docs_store_path=docs_store_path, 
                                          pdf_images_path=pdf_images_path,
-                                         storage_dir=storage_dir, verbose=True)
+                                         storage_dir=storage_dir, verbose=True, number_of_docs=1)
 #response = agent.run("Give me the location of Homewood Suites by Hilton. Do not guess only use context.")
 #response = agent.run("Give me the address of Homewood Suites by Hilton where I was staying and you have an invoce from this hotel.")
-response = agent.run("What was the outcome of Akela's attack yesterday, as per the jungle's law?")
-response = agent.run("What action did not occur, instead of going to the store?")
+response = agent.run("Is it generally recommended by operations teams to perform failover automatically or manually?")
+#response = agent.run("What action did not occur, instead of going to the store?")
 #response = agent.run("What genAI-enabled or -assisted experiences benefits will be delivered to enterprises according to Forester?")
 print(response)
 

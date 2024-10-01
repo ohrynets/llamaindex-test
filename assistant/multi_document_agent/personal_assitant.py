@@ -34,14 +34,19 @@ from llama_index.core.agent import (
     ReActAgentWorker,
 )
 
-DOCUMENT_ASSISTANT_WRITING_ASSISTANT = """\
-You are a perosnal document assistant. You help to find relevant information in personal files. \
-You write in a friendly yet professional tone but can tailor \
-your writing style that best works for a user-specified audience. \
-If you do not know the answer to a question, respond by saying \
-"I do not know the answer to your question." \
-"Use John Clees style to provide the answer"
-"""
+from llama_index.core.node_parser import (
+    SemanticDoubleMergingSplitterNodeParser,
+    LanguageConfig,
+)
+#Download model python3 -m spacy download en_core_web_md
+
+from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.node_parser import MarkdownNodeParser
+
+import nltk
+import spacy
+nltk.download('punkt_tab')
+spacy.cli.download("en_core_web_md")
 
 class PdfFileReader(BaseReader):
     def __init__(self, pdf_images_path: str, page_chunks: bool = False):
@@ -81,6 +86,7 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         storage_dir: str,
         pdf_images_path: str,
         verbose: bool = False,
+        number_of_docs: int = None,
         **kwargs: Any,
     ) -> None:
         """Init params."""
@@ -98,15 +104,38 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
                 StorageContext.from_defaults(persist_dir=storage_dir)
             )
         else:
-            reader = self.process_documets(docs_store_path)
+            config = LanguageConfig(language="english", spacy_model="en_core_web_md")
+            if number_of_docs!=None:
+                reader = SimpleDirectoryReader(input_dir=docs_store_path, num_files_limit=number_of_docs, file_extractor=file_extractor)
+            else:
+                reader = SimpleDirectoryReader(input_dir=docs_store_path, file_extractor=file_extractor).load_data(show_progress=True)
+            documents = reader.load_data(show_progress=True)
+            parser = MarkdownNodeParser()
+            markdown_pages = parser.get_nodes_from_documents(documents)
+
+            sentence_splitter = SentenceSplitter(
+                chunk_size=2000,
+                chunk_overlap=200,
+            )
+
+            splitter = SemanticDoubleMergingSplitterNodeParser(
+                language_config=config,
+                initial_threshold=0.2,
+                appending_threshold=0.4,
+                merging_threshold=0.4,
+                max_chunk_size=3000,
+                merging_range=2,
+                splitter=[sentence_splitter]
+            )
+            nodes = splitter.get_nodes_from_documents(markdown_pages)
             transformations=[   
                 embeding_llm
             ]
-            self.vector_index = VectorStoreIndex.from_documents(reader, transformations=transformations, 
+            self.vector_index = VectorStoreIndex.from_documents(nodes, transformations=transformations, 
                                                        show_progress=True)
-        
-        # save the initial index
-        self.vector_index.storage_context.persist(persist_dir=storage_dir)
+            # save the initial index
+            self.vector_index.storage_context.persist(persist_dir=storage_dir)
+            
         query_engine_tools = [
                 QueryEngineTool (
                     query_engine=self.vector_index.as_query_engine(llm=agent_llm, similarity_top_k=5),
@@ -136,7 +165,7 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
 
     def process_documets(self, docs_store_path):
         file_extractor={".pdf": PdfFileReader(self.pdf_images_path)}
-        reader = SimpleDirectoryReader(input_dir=docs_store_path, file_extractor=file_extractor).load_data(show_progress=True)
+        
         return reader
 
     def get_modules(self) -> Dict[str, Any]:

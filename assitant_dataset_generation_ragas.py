@@ -22,7 +22,9 @@ from llama_index.llms.openai import OpenAI
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.core.node_parser import MarkdownNodeParser
 import nltk
+import spacy
 nltk.download('punkt_tab')
+spacy.cli.download("en_core_web_md")
 from llama_index.core.node_parser import (
     SemanticDoubleMergingSplitterNodeParser,
     LanguageConfig,
@@ -58,11 +60,14 @@ langfuse_callback_handler = LlamaIndexCallbackHandler(
 #Settings.callback_manager = CallbackManager([langfuse_callback_handler])
 ollama = Ollama(model="llama3.1:8b", request_timeout=120.0, base_url=ollama_base_url, 
                 is_function_calling_model=True)
+
 ollama_agent = Ollama(model="llama3.2:latest", request_timeout=120.0, base_url=ollama_base_url, 
                 is_function_calling_model=True)
 embed_model = OllamaEmbedding(model_name="bge-m3", request_timeout=120.0, base_url=ollama_base_url)
 
-critic_llm = OpenAI(model="gpt-4-turbo")
+#critic_llm = OpenAI(model="gpt-4-turbo")
+critic_llm = Ollama(model="llama3.1:8b", request_timeout=120.0, base_url=ollama_base_url, 
+                is_function_calling_model=True)
 
 Settings.llm = ollama
 Settings.embed_model = embed_model
@@ -80,7 +85,7 @@ parser = MarkdownNodeParser()
 markdown_pages = parser.get_nodes_from_documents(documents)
 
 sentence_splitter = SentenceSplitter(
-    chunk_size=5000,
+    chunk_size=2000,
     chunk_overlap=200,
 )
 
@@ -89,11 +94,12 @@ splitter = SemanticDoubleMergingSplitterNodeParser(
     initial_threshold=0.2,
     appending_threshold=0.4,
     merging_threshold=0.4,
-    max_chunk_size=10000,
-    merging_range=4,
+    max_chunk_size=3000,
+    merging_range=2,
     splitter=[sentence_splitter]
 )
 nodes = splitter.get_nodes_from_documents(markdown_pages)
+#nodes = splitter.get_nodes_from_documents(documents)
 export_nodes(nodes, "nodes_text")
 export_nodes(markdown_pages, "markdown_pages")
 
@@ -107,7 +113,7 @@ def generate_eval_test(nodes):
 
     eval_testset = generator.generate_with_llamaindex_docs(
         nodes,
-        test_size=5,
+        test_size=20,
         distributions={simple: 0.5, reasoning: 0.25, multi_context: 0.25},
     )
     eval_questions_df = eval_testset.to_pandas()

@@ -66,17 +66,11 @@ langfuse_callback_handler = LlamaIndexCallbackHandler(
     debug=False,
 )
 
-tracer_provider = register(
-  project_name="llama-test", # Default is 'default'
-  endpoint=phoenix_url,
-  batch=True,
-  verbose=True,
-)
 from phoenix.otel import register
 
 tracer_provider = register(
   project_name="llama-test",
-  endpoint="http://10.242.194.2:6006/v1/traces",
+  endpoint=phoenix_url,
   batch=True,
   verbose=True,
 )

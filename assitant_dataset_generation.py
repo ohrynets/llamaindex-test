@@ -14,10 +14,11 @@ from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.core.evaluation import RelevancyEvaluator
 from llama_index.core.llama_dataset.generator import RagDatasetGenerator
 from llama_index.core import SimpleDirectoryReader
+import duckdb
 
 ollama_base_url=os.environ['OLLAMA_BASE_URL']
 pdf_images_path=os.environ['PDF_IMAGES_STORE_PATH']
-docs_store_path=os.environ['DOCS_STORE_PATH1']
+docs_store_path=os.environ['DOCS_STORE_PATH']
 langfuse_url = os.environ['LANGFUSE_URL']
 langfuse_public_key = os.environ['LANGFUSE_PUBLIC_KEY']
 langfuse_secret_key = os.environ['LANGFUSE_SECRET_KEY']
@@ -46,14 +47,23 @@ Settings.llm = ollama
 Settings.embed_model = hf_embed_model
 print(f"Folder with documents:{docs_store_path}")
 file_extractor={".pdf": PdfFileReader(pdf_images_path)}
-reader = SimpleDirectoryReader(input_dir=docs_store_path, num_files_limit=1, file_extractor=file_extractor)            
+#reader = SimpleDirectoryReader(input_dir=docs_store_path, num_files_limit=10, file_extractor=file_extractor)
+reader = SimpleDirectoryReader(input_dir=docs_store_path, num_files_limit=1)            
 documents = reader.load_data(show_progress=True)
 
-
-data_generator = RagDatasetGenerator.from_documents(documents, llm=ollama, 
-                                                    num_questions_per_chunk=2,
+QUESTION_GENERATE_QUERY="""You are a Teacher/Professor. \
+Your task is to setup on questions for an upcoming quiz/examination. \
+The questions should be diverse in nature across the document. \
+Restrict the questions to the context information provided. \
+Don't use new line separator."""
+data_generator = RagDatasetGenerator.from_documents(documents, llm=ollama,
+                                                    question_gen_query=QUESTION_GENERATE_QUERY, 
+                                                    num_questions_per_chunk=1,
                                                     show_progress=True)
 print(data_generator.question_gen_query)
 eval_questions = data_generator.generate_questions_from_nodes()
-eval_questions.save_json("eval_questions.json")
+eval_questions_df = eval_questions.to_pandas()
+duckdb.sql("CREATE TABLE eval_data AS SELECT * FROM eval_questions_df")
+duckdb.sql("INSERT INTO eval_data SELECT * FROM eval_questions_df")
+duckdb.sql("COPY (SELECT * FROM eval_data) TO 'eval_questions.parquet' (FORMAT PARQUET)")
 print(eval_questions)

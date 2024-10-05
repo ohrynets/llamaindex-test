@@ -61,13 +61,12 @@ langfuse_callback_handler = LlamaIndexCallbackHandler(
 ollama = Ollama(model="llama3.1:8b", request_timeout=120.0, base_url=ollama_base_url, 
                 is_function_calling_model=True)
 
-ollama_agent = Ollama(model="llama3.2:latest", request_timeout=120.0, base_url=ollama_base_url, 
+ollama_agent = Ollama(model="llama3.2:latest", request_timeout=240.0, base_url=ollama_base_url, 
                 is_function_calling_model=True)
-embed_model = OllamaEmbedding(model_name="bge-m3", request_timeout=120.0, base_url=ollama_base_url)
+embed_model = OllamaEmbedding(model_name="bge-m3", request_timeout=240.0, base_url=ollama_base_url)
 
 #critic_llm = OpenAI(model="gpt-4-turbo")
-critic_llm = Ollama(model="llama3.1:8b", request_timeout=120.0, base_url=ollama_base_url, 
-                is_function_calling_model=True)
+critic_llm = Ollama(model="llama3.1:8b", request_timeout=240.0, base_url=ollama_base_url)
 
 Settings.llm = ollama
 Settings.embed_model = embed_model
@@ -113,8 +112,10 @@ def generate_eval_test(nodes):
 
     eval_testset = generator.generate_with_llamaindex_docs(
         nodes,
-        test_size=20,
+        test_size=30,
         distributions={simple: 0.5, reasoning: 0.25, multi_context: 0.25},
+        with_debugging_logs=True,
+        is_async=False
     )
     eval_questions_df = eval_testset.to_pandas()
     duckdb.sql("CREATE TABLE eval_data AS SELECT * FROM eval_questions_df")

@@ -3,9 +3,6 @@ include:
   
 services:
   app:
-    env_file:
-      - devcontainer.env
-    image: mcr.microsoft.com/devcontainers/base:jammy
     build: 
       context: .
       dockerfile: Dockerfile

@@ -6,6 +6,9 @@ services:
     build: 
       context: .
       dockerfile: Dockerfile
+      args:
+        - USER_UID=${USER_UID:-1000}
+        - USER_GID=${USER_GID:-1000}
     environment:
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - HF_HOME=/workspace/model

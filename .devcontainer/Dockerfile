@@ -4,11 +4,11 @@ FROM ubuntu:22.04
 # Set environment variables to avoid user interaction during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 ARG USERNAME=llama
-ARG USER_UID=1000
+ARG USER_UID=501
 ARG USER_GID=$USER_UID
 
-RUN groupadd --gid $USER_GID $USERNAME \
-  && useradd -s /bin/bash --uid $USER_UID --gid $USER_GID -m $USERNAME \
+RUN getent group $USER_GID 2>&1 >/dev/null || groupadd --gid $USER_GID $USERNAME 
+RUN useradd -s /bin/bash --uid $USER_UID --gid $USER_GID -m $USERNAME \
   && apt-get update \
   && apt-get install -y sudo \
   && echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME\

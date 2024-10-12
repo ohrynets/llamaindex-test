@@ -50,6 +50,9 @@ storage_dir = os.environ['STORAGE_DIR']
 #Configure 
 session_id = str(uuid.uuid4())
 print(f"Session_id: {session_id}")
+print(f"Ollama Url: {ollama_base_url}")
+print(f"Langfuse Url: {langfuse_url}")
+
 langfuse_callback_handler = LlamaIndexCallbackHandler(
     public_key=langfuse_public_key,
     secret_key=langfuse_secret_key,
@@ -66,7 +69,7 @@ ollama_agent = Ollama(model="llama3.2:latest", request_timeout=240.0, base_url=o
 embed_model = OllamaEmbedding(model_name="bge-m3", request_timeout=240.0, base_url=ollama_base_url)
 
 #critic_llm = OpenAI(model="gpt-4-turbo")
-critic_llm = Ollama(model="llama3.1:8b", request_timeout=240.0, base_url=ollama_base_url)
+critic_llm = Ollama(model="mistral-nemo:latest", request_timeout=240.0, base_url=ollama_base_url)
 
 Settings.llm = ollama
 Settings.embed_model = embed_model

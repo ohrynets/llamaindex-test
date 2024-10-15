@@ -17,7 +17,10 @@
 				"donjayamanne.python-extension-pack",
 				"donjayamanne.python-environment-manager",
 				"jithurjacob.nbpreviewer",
-				"ms-toolsai.jupyter"
+				"ms-toolsai.jupyter",
+				"adamviola.parquet-explorer",
+				"ms-toolsai.vscode-ai",
+				"zeshuaro.vscode-python-poetry",
 			],
 			"settings": {
 				"terminal.integrated.shell.linux": "/bin/bash"

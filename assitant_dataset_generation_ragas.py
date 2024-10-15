@@ -23,6 +23,7 @@ from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.core.node_parser import MarkdownNodeParser
 import nltk
 import spacy
+
 nltk.download('punkt_tab')
 spacy.cli.download("en_core_web_md")
 from llama_index.core.node_parser import (
@@ -64,11 +65,11 @@ ollama = Ollama(model="llama3.1:8b", request_timeout=120.0, base_url=ollama_base
 ollama_agent = Ollama(model="llama3.2:latest", request_timeout=240.0, base_url=ollama_base_url, 
                 is_function_calling_model=True)
 embed_model = OllamaEmbedding(model_name="bge-m3", request_timeout=240.0, base_url=ollama_base_url)
-
+nvidia = NVIDIA(model="meta/llama-3.1-70b-instruct")
 #critic_llm = OpenAI(model="gpt-4-turbo")
-critic_llm = Ollama(model="llama3.1:8b", request_timeout=240.0, base_url=ollama_base_url)
-
-Settings.llm = ollama
+#critic_llm = Ollama(model="llama3.1:8b", request_timeout=240.0, base_url=ollama_base_url)
+critic_llm = nvidia
+Settings.llm = critic_llm
 Settings.embed_model = embed_model
 print(f"Folder with documents:{docs_store_path}")
 file_extractor={".pdf": PdfFileReader(pdf_images_path, page_chunks=False)}
@@ -112,10 +113,10 @@ def generate_eval_test(nodes):
 
     eval_testset = generator.generate_with_llamaindex_docs(
         nodes,
-        test_size=30,
-        distributions={simple: 0.5, reasoning: 0.25, multi_context: 0.25},
+        test_size=50,
+        distributions={simple: 0.3, reasoning: 0.40, multi_context: 0.30},
         with_debugging_logs=True,
-        is_async=False
+        is_async=True
     )
     eval_questions_df = eval_testset.to_pandas()
     duckdb.sql("CREATE TABLE eval_data AS SELECT * FROM eval_questions_df")

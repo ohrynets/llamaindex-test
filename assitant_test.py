@@ -1,6 +1,6 @@
 from assistant.multi_document_agent.personal_assitant import MultiDocumentAssistantAgentsPack
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(verbose=True, override=True)
 import os
 from langfuse.llama_index import LlamaIndexCallbackHandler
 from llama_index.core.callbacks import CallbackManager
@@ -11,12 +11,11 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core.response.pprint_utils import pprint_response
 from llama_index.embeddings.ollama import OllamaEmbedding
 import duckdb
+from llama_index.llms.openai import OpenAI
 
 from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
-from phoenix.otel import register
+
 import pandas as pd
-
-
 
 from datasets import Dataset 
 from ragas.metrics import (
@@ -81,40 +80,72 @@ print(f"Ollama Url: {ollama_base_url}")
 print(f"Langfuse Url: {langfuse_url}")
 ollama = Ollama(model="llama3.1:8b", request_timeout=120.0, base_url=ollama_base_url, 
                 is_function_calling_model=True)
+qwen = Ollama(model="qwen2.5:32b", request_timeout=120.0, base_url=ollama_base_url, 
+                is_function_calling_model=True)
+
 ollama_agent = Ollama(model="llama3.2:latest", request_timeout=120.0, base_url=ollama_base_url, 
                 is_function_calling_model=True)
 embed_model = OllamaEmbedding(model_name="bge-m3", request_timeout=120.0, base_url=ollama_base_url)
+critic_llm = OpenAI(model="gpt-4-turbo")
 
+import nest_asyncio
+
+nest_asyncio.apply()
 
 hf_embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
 Settings.llm = ollama
 Settings.embed_model = embed_model
 
-agent = MultiDocumentAssistantAgentsPack(main_llm=ollama, agent_llm=ollama_agent, 
+agent = MultiDocumentAssistantAgentsPack(main_llm=ollama_agent, agent_llm=ollama_agent, 
                                          embeding_llm=embed_model, 
                                          docs_store_path=docs_store_path, 
                                          pdf_images_path=pdf_images_path,
                                          storage_dir=storage_dir, verbose=True, number_of_docs=1)
 
-eval_questions = duckdb.query("SELECT question, ground_truth FROM read_parquet('eval_questions.parquet')")
-# for row in eval_questions.fetchall():
-#     question = row[0]
-#     ground_truth = row[1]
-#     print(f"Question: {question}")
-#     print(f"Ground Truth: {ground_truth}")
-#     response = agent.run(question)
+eval_questions = duckdb.query("SELECT question, ground_truth FROM read_parquet('eval_questions.parquet') LIMIT 100")
+queries = []
+contexts = []
+answers = []
+ground_truths = []
+ 
+for row in eval_questions.fetchall():
+    question = row[0]
+    ground_truth = row[1]
+    print(f"Question: {question}")
+    print(f"Ground Truth: {ground_truth}")
     
-#     print(f"Response: {response}")
-#     print("--------------------------------------------------")
+    try:
+        response = agent.run(question)
+        print(f"Response: {response}")
+        queries.append(question)
+        contexts.append(ground_truth)
+        answers.append(response.response)
+        ground_truths.append(ground_truth)
+    except Exception as e:
+        response = None
+        print(f"Error processing question '{question}': {e}")
+    
+    print("--------------------------------------------------")
+    
 
-def evaluate_and_save(metrics, ollama, agent, eval_questions):
+
+data = {
+    "question": queries,
+    "contexts": contexts,
+    "answer": answers,
+    "ground_truth": ground_truths,
+}
+
+eval_dataset = Dataset.from_dict(data)
+
+def evaluate_and_save(metrics, llm, agent, eval_questions):
     result = evaluate(
-    query_engine=agent.get_modules()["vector_index"].as_query_engine(),
-    metrics=metrics,
-    dataset=Dataset.from_pandas(eval_questions.to_df()),
-    llm=ollama,
-    embeddings=Settings.embed_model,
-)
+        query_engine=agent.get_modules()["vector_index"].as_query_engine(),
+        metrics=metrics,
+        dataset=eval_questions,
+        llm=llm,
+        embeddings=Settings.embed_model,
+    )
 
     eval_result_df = result.to_pandas()
     duckdb.sql("CREATE TABLE eval_result AS SELECT * FROM eval_result_df")
@@ -122,18 +153,14 @@ def evaluate_and_save(metrics, ollama, agent, eval_questions):
     duckdb.sql("COPY (SELECT * FROM eval_result) TO 'eval_result.parquet' (FORMAT PARQUET)")
     return result
 
-evalation_result = evaluate_and_save(metrics, ollama, agent, eval_questions)
+evalation_result = evaluate_and_save(metrics, qwen, agent, eval_dataset)
 print(evalation_result)
+#{'faithfulness': nan, 'answer_relevancy': 0.3304, 'context_precision': 1.0000, 'context_recall': 0.6019}
+#{'faithfulness': nan, 'answer_relevancy': 0.4121, 'context_precision': 0.9211, 'context_recall': 0.7560}
+#{'faithfulness': 0.7818, 'answer_relevancy': 0.6639, 'context_precision': 0.6395, 'context_recall': 0.7416}
+#{'faithfulness': 1.0000, 'answer_relevancy': 0.3567, 'context_precision': 0.9250, 'context_recall': 0.7131}
+#{'faithfulness': 0.6000, 'answer_relevancy': 0.4819, 'context_precision': 0.9250, 'context_recall': 0.8762}
 
-from phoenix.trace import SpanEvaluations
-from phoenix.trace.dsl.helpers import SpanQuery
-import phoenix as px
-from phoenix.session.evaluation import get_qa_with_reference
-
-#client = px.Client()
-#spans_dataframe = get_qa_with_reference(client)
-# Assign span ids to your ragas evaluation scores (needed so Phoenix knows where to attach the spans).
-#print(spans_dataframe)
     
 #response = agent.run("Give me the location of Homewood Suites by Hilton. Do not guess only use context.")
 #response = agent.run("Give me the address of Homewood Suites by Hilton where I was staying and you have an invoce from this hotel.")

@@ -11,3 +11,7 @@
 /docs
 /nebulagraph_cell_19.html
 .pdf_images
+*.lock
+.cache/*
+*.pyc
+.storage/*

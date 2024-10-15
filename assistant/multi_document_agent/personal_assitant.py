@@ -33,6 +33,14 @@ from llama_index.core.agent import (
     FunctionCallingAgentWorker,
     ReActAgentWorker,
 )
+from llama_index.core.schema import (
+    BaseNode,
+    Document,
+    ImageDocument,
+    ImageNode,
+    NodeRelationship,
+    TextNode,
+)
 
 from llama_index.core.node_parser import (
     SemanticDoubleMergingSplitterNodeParser,
@@ -45,8 +53,8 @@ from llama_index.core.node_parser import MarkdownNodeParser
 
 import nltk
 import spacy
-nltk.download('punkt_tab')
-spacy.cli.download("en_core_web_md")
+import uuid
+
 
 class PdfFileReader(BaseReader):
     def __init__(self, pdf_images_path: str, page_chunks: bool = False):
@@ -71,7 +79,46 @@ class PdfFileReader(BaseReader):
             nodes.append(doc)
         return nodes
 
+def build_index(embeding_llm, docs_store_path, pdf_images_path, number_of_docs=None, page_chunks=False):
+        file_extractor={".pdf": PdfFileReader(pdf_images_path, page_chunks=page_chunks)}
+        config = LanguageConfig(language="english", spacy_model="en_core_web_md")
+        if number_of_docs != None:
+            reader = SimpleDirectoryReader(input_dir=docs_store_path, num_files_limit=number_of_docs, file_extractor=file_extractor)
+        else:
+            reader = SimpleDirectoryReader(input_dir=docs_store_path, file_extractor=file_extractor)
+        documents = reader.load_data(show_progress=True)
+        parser = MarkdownNodeParser()
+        markdown_pages = parser.get_nodes_from_documents(documents)
 
+        sentence_splitter = SentenceSplitter(
+                chunk_size=3000,
+                chunk_overlap=200,
+            )
+        
+        def id_func(i: int, doc: BaseNode) -> str:
+            return f"{doc.id_}_{str(uuid.uuid4())}"
+
+
+        nltk.download('punkt_tab')
+        spacy.cli.download("en_core_web_md")
+        splitter = SemanticDoubleMergingSplitterNodeParser(
+                language_config=config,
+                initial_threshold=0.4,
+                appending_threshold=0.6,
+                merging_threshold=0.6,
+                max_chunk_size=5000,
+                merging_range=2,
+                splitter=[sentence_splitter],
+                id_func=id_func,
+            )
+        nodes = splitter.get_nodes_from_documents(markdown_pages)
+        transformations=[   
+                embeding_llm
+            ]
+        vector_index = VectorStoreIndex(nodes=nodes, transformations=transformations, show_progress=True)
+        
+        return vector_index
+    
 class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
     """Multi-document Agents pack.
 
@@ -96,43 +143,17 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         self.agents = {}
         self.pdf_images_path = pdf_images_path
         self.verbose = verbose
+        self.agent_llm = agent_llm
         # this is for the baseline
-        file_extractor={".pdf": PdfFileReader(self.pdf_images_path)}
+        
         
         if os.path.exists(storage_dir):
             self.vector_index = load_index_from_storage(
                 StorageContext.from_defaults(persist_dir=storage_dir)
             )
         else:
-            config = LanguageConfig(language="english", spacy_model="en_core_web_md")
-            if number_of_docs!=None:
-                reader = SimpleDirectoryReader(input_dir=docs_store_path, num_files_limit=number_of_docs, file_extractor=file_extractor)
-            else:
-                reader = SimpleDirectoryReader(input_dir=docs_store_path, file_extractor=file_extractor).load_data(show_progress=True)
-            documents = reader.load_data(show_progress=True)
-            parser = MarkdownNodeParser()
-            markdown_pages = parser.get_nodes_from_documents(documents)
-
-            sentence_splitter = SentenceSplitter(
-                chunk_size=2000,
-                chunk_overlap=200,
-            )
-
-            splitter = SemanticDoubleMergingSplitterNodeParser(
-                language_config=config,
-                initial_threshold=0.2,
-                appending_threshold=0.4,
-                merging_threshold=0.4,
-                max_chunk_size=3000,
-                merging_range=2,
-                splitter=[sentence_splitter]
-            )
-            nodes = splitter.get_nodes_from_documents(markdown_pages)
-            transformations=[   
-                embeding_llm
-            ]
-            self.vector_index = VectorStoreIndex.from_documents(nodes, transformations=transformations, 
-                                                       show_progress=True)
+            print(f"Folder with documents:{docs_store_path}. Loadding ...")
+            self.vector_index = build_index(embeding_llm, docs_store_path,  self.pdf_images_path, number_of_docs)
             # save the initial index
             self.vector_index.storage_context.persist(persist_dir=storage_dir)
             
@@ -141,8 +162,7 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
                     query_engine=self.vector_index.as_query_engine(llm=agent_llm, similarity_top_k=5),
                     metadata=ToolMetadata(
                         name="vector_tool",
-                        description="Useful to answer question based on relevant documents. " \
-                                "Please mention the document name in the answer and provide relevant citations.",
+                        description="Useful to answer question based on relevant documents. ",
                     )
                 )
         ] 
@@ -161,21 +181,24 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
                 role=MessageRole.SYSTEM,
             )
         ]
-        self.top_agent = self.main_agent.as_agent(chat_history=chat_history, verbose=verbose)
+        self.top_agent = self.main_agent.as_agent(chat_history=chat_history, verbose=self.verbose)
+
+    
 
     def process_documets(self, docs_store_path):
         file_extractor={".pdf": PdfFileReader(self.pdf_images_path)}
-        
-        return reader
-
+        #TDOD: Implement this method to process the documents
+        pass
+    
     def get_modules(self) -> Dict[str, Any]:
         """Get modules."""
         return {
             "top_agent": self.top_agent,
             "doc_agents": self.agents,
+            "vector_index": self.vector_index,
         }
 
     def run(self, *args: Any, **kwargs: Any) -> Any:
         """Run the pipeline."""
         return self.top_agent.query(*args, **kwargs)
-        #return self.vector_index.as_query_engine().query(*args, **kwargs)
+        #return self.vector_index.as_query_engine(lm=self.agent_llm, similarity_top_k=10, response_mode="context_only").query(*args, **kwargs)

@@ -7,6 +7,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
+        - USERNAME=${USERNAME:-vscode}
         - USER_UID=${USER_UID:-1000}
         - USER_GID=${USER_GID:-1000}
     environment:
@@ -15,6 +16,7 @@ services:
       - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128,expandable_segments:True
     volumes:
       - ../:/workspace
+      - ${HOME}/.ssh:/home/${USERNAME}/.ssh:ro
       - ${DOCS_FOLDER:-/Users/oleggrynets/docs/}:/mnt/docs:ro
     command: sleep infinity
     networks:

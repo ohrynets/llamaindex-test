@@ -20,11 +20,6 @@ from llama_index.core.response_synthesizers import Refine
 from llama_index.core.chat_engine import SimpleChatEngine
 from llama_index.core.prompts.system import MARKETING_WRITING_ASSISTANT
 
-from llama_index.agent.introspective import IntrospectiveAgentWorker
-from llama_index.agent.introspective import (
-    ToolInteractiveReflectionAgentWorker,
-)
-from llama_index.agent.introspective import SelfReflectionAgentWorker
 from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core import ChatPromptTemplate
 

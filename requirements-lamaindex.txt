@@ -22,3 +22,6 @@ sentencepiece
 Pillow
 llama-index-agent-introspective
 spacy
+llama-index-postprocessor-colbert-rerank
+llama-index-llms-azure-openai
+llama-index-readers-confluence

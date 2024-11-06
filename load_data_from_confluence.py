@@ -54,8 +54,8 @@ cql = f'type="page" AND ancestor=2401961571 AND space="{space_key}"'
 
 reader = ConfluenceReader(base_url=base_url, oauth2=oauth2_dict)
 #TODO: Add support for pagination and attachements
-#documents = reader.load_data(cql=cql, max_num_results=10, include_attachments=False)
-documents = reader.load_data(cql=cql, include_attachments=False)
+documents = reader.load_data(cql=cql, limit = 10, max_num_results=10, include_attachments=False)
+#documents = reader.load_data(cql=cql, include_attachments=False)
 #documents = reader.load_data(space_key=space_key, include_attachments=True, page_status="current")
 count = 1
 documents_dict = list()
@@ -67,16 +67,16 @@ while len(documents):
                             'page_id': d.metadata['page_id'], 
                             'status': d.metadata['status'], 
                             'text': d.text})
-        print(f"Title: {d.metadata['title']}")
+        print(f"PageId: {d.metadata['page_id']} Title: {d.metadata['title']}")
         #print(f"URL: {d.metadata['url']}")
-    break
+    #break
     cursor = reader.get_next_cursor()
-    documents = reader.load_data(cql=cql, cursor=cursor, max_num_results=10, include_attachments=False)    
+    documents = reader.load_data(cql=cql, cursor=cursor, limit = 10, max_num_results=10, include_attachments=False)    
     count = count + 1
 
 
 kb_pages_df = pandas.DataFrame.from_records(documents_dict)
-kb_pages = 'kb_pages.parquet'
+kb_pages = 'kb_pages2.parquet'
 duckdb.sql("CREATE TABLE kb_pages AS SELECT * FROM kb_pages_df")
 
 # insert into the table "my_table" from the DataFrame "kb_pages_df"

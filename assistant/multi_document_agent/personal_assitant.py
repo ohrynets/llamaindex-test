@@ -22,6 +22,7 @@ from llama_index.core.prompts.system import MARKETING_WRITING_ASSISTANT
 
 from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core import ChatPromptTemplate
+from llama_index.postprocessor.colbert_rerank import ColbertRerank
 
 from llama_index.core.agent import (
     StructuredPlannerAgent,
@@ -36,7 +37,12 @@ from llama_index.core.schema import (
     NodeRelationship,
     TextNode,
 )
-
+from llama_index.core.vector_stores.types import (
+    MetadataFilters,
+    VectorStoreQuery,
+    VectorStoreQueryMode,
+    VectorStoreQueryResult,
+)
 from llama_index.core.node_parser import (
     SemanticDoubleMergingSplitterNodeParser,
     LanguageConfig,
@@ -74,13 +80,93 @@ class PdfFileReader(BaseReader):
             nodes.append(doc)
         return nodes
 
-def build_index(embeding_llm, docs_store_path, pdf_images_path, number_of_docs=None, page_chunks=False):
-        file_extractor={".pdf": PdfFileReader(pdf_images_path, page_chunks=page_chunks)}
-        config = LanguageConfig(language="english", spacy_model="en_core_web_md")
-        if number_of_docs != None:
-            reader = SimpleDirectoryReader(input_dir=docs_store_path, num_files_limit=number_of_docs, file_extractor=file_extractor)
+
+    
+class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
+    """Multi-document Agents pack.
+
+    """
+
+    def __init__(
+        self,
+        main_llm: LLM,
+        agent_llm: LLM,
+        embeding_llm: LLM,
+        docs_store_path: str,
+        storage_dir: str,
+        pdf_images_path: str,
+        verbose: bool = False,
+        number_of_files: int = None,        
+        **kwargs: Any,
+    ) -> None:
+        """Init params."""
+        Settings.llm = main_llm
+        self.embed_model = embeding_llm
+        Settings.embed_model = self.embed_model
+        
+        # Build agents dictionary
+        self.agents = {}
+        self.pdf_images_path = pdf_images_path
+        self.docs_store_path = docs_store_path
+        self.verbose = verbose
+        self.agent_llm = agent_llm
+        self.main_llm = main_llm
+        self.number_of_files = number_of_files
+        # this is for the baseline
+        
+        
+        if os.path.exists(storage_dir):
+            self.vector_index = load_index_from_storage(
+                StorageContext.from_defaults(persist_dir=storage_dir)
+            )
         else:
-            reader = SimpleDirectoryReader(input_dir=docs_store_path, file_extractor=file_extractor)
+            print(f"Folder with documents:{docs_store_path}. Loadding ...")
+            self.vector_index = self.build_index()
+            # save the initial index
+            self.vector_index.storage_context.persist(persist_dir=storage_dir)
+        
+        self.colbert_reranker = ColbertRerank(
+                                            top_n=5,
+                                            model="colbert-ir/colbertv2.0",
+                                            tokenizer="colbert-ir/colbertv2.0",
+                                            keep_retrieval_score=True,
+                                        )
+        
+        self.vector_query_engine = self.vector_index.as_query_engine(llm=agent_llm, similarity_top_k=10, )
+        #                                                                     node_postprocessors=[self.colbert_reranker])
+        query_engine_tools = [
+                QueryEngineTool (
+                    query_engine=self.vector_query_engine,
+                    metadata=ToolMetadata(
+                        name="vector_tool",
+                        description="Useful to answer question based on relevant documents. ",
+                    )
+                )
+        ] 
+
+        self.tool_interactive_reflection_agent_worker = FunctionCallingAgentWorker.from_tools(
+            tools=query_engine_tools, llm=agent_llm, verbose=self.verbose
+        )
+        
+        self.main_agent = ReActAgentWorker.from_tools(tools=query_engine_tools, llm=main_llm,
+             verbose=self.verbose
+        )
+
+        chat_history = [
+            ChatMessage(
+                content="You are an assistant that generates answer based on documents. Please provide the answer in John Cleese style.",
+                role=MessageRole.SYSTEM,
+            )
+        ]
+        self.top_agent = self.main_agent.as_agent(chat_history=chat_history, verbose=self.verbose)
+
+    def build_index(self):        
+        file_extractor={".pdf": PdfFileReader(self.pdf_images_path, page_chunks=self.page_chunks)}
+        config = LanguageConfig(language="english", spacy_model="en_core_web_md")
+        if self.number_of_docs != None:
+            reader = SimpleDirectoryReader(input_dir=self.docs_store_path, num_files_limit=self.number_of_files, file_extractor=file_extractor)
+        else:
+            reader = SimpleDirectoryReader(input_dir=self.docs_store_path, file_extractor=file_extractor)
         documents = reader.load_data(show_progress=True)
         parser = MarkdownNodeParser()
         markdown_pages = parser.get_nodes_from_documents(documents)
@@ -108,77 +194,12 @@ def build_index(embeding_llm, docs_store_path, pdf_images_path, number_of_docs=N
             )
         nodes = splitter.get_nodes_from_documents(markdown_pages)
         transformations=[   
-                embeding_llm
+                self.embed_model
             ]
         vector_index = VectorStoreIndex(nodes=nodes, transformations=transformations, show_progress=True)
         
         return vector_index
-    
-class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
-    """Multi-document Agents pack.
-
-    """
-
-    def __init__(
-        self,
-        main_llm: LLM,
-        agent_llm: LLM,
-        embeding_llm: LLM,
-        docs_store_path: str,
-        storage_dir: str,
-        pdf_images_path: str,
-        verbose: bool = False,
-        number_of_docs: int = None,
-        **kwargs: Any,
-    ) -> None:
-        """Init params."""
-        Settings.llm = main_llm
-        Settings.embed_model = embeding_llm
-        # Build agents dictionary
-        self.agents = {}
-        self.pdf_images_path = pdf_images_path
-        self.verbose = verbose
-        self.agent_llm = agent_llm
-        # this is for the baseline
-        
-        
-        if os.path.exists(storage_dir):
-            self.vector_index = load_index_from_storage(
-                StorageContext.from_defaults(persist_dir=storage_dir)
-            )
-        else:
-            print(f"Folder with documents:{docs_store_path}. Loadding ...")
-            self.vector_index = build_index(embeding_llm, docs_store_path,  self.pdf_images_path, number_of_docs)
-            # save the initial index
-            self.vector_index.storage_context.persist(persist_dir=storage_dir)
-            
-        query_engine_tools = [
-                QueryEngineTool (
-                    query_engine=self.vector_index.as_query_engine(llm=agent_llm, similarity_top_k=5),
-                    metadata=ToolMetadata(
-                        name="vector_tool",
-                        description="Useful to answer question based on relevant documents. ",
-                    )
-                )
-        ] 
-
-        self.tool_interactive_reflection_agent_worker = FunctionCallingAgentWorker.from_tools(
-            tools=query_engine_tools, llm=agent_llm, verbose=self.verbose
-        )
-        
-        self.main_agent = ReActAgentWorker.from_tools(tools=query_engine_tools, llm=main_llm,
-             verbose=self.verbose
-        )
-
-        chat_history = [
-            ChatMessage(
-                content="You are an assistant that generates answer based on documents. Please provide the answer in John Cleese style.",
-                role=MessageRole.SYSTEM,
-            )
-        ]
-        self.top_agent = self.main_agent.as_agent(chat_history=chat_history, verbose=self.verbose)
-
-    
+   
 
     def process_documets(self, docs_store_path):
         file_extractor={".pdf": PdfFileReader(self.pdf_images_path)}
@@ -188,12 +209,15 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
     def get_modules(self) -> Dict[str, Any]:
         """Get modules."""
         return {
+            "main_llm": self.main_llm,
+            "agent_llm": self.agent_llm,
             "top_agent": self.top_agent,
             "doc_agents": self.agents,
             "vector_index": self.vector_index,
+            "vector_query_engine": self.vector_query_engine,
         }
 
     def run(self, *args: Any, **kwargs: Any) -> Any:
         """Run the pipeline."""
-        return self.top_agent.query(*args, **kwargs)
-        #return self.vector_index.as_query_engine(lm=self.agent_llm, similarity_top_k=10, response_mode="context_only").query(*args, **kwargs)
+        #return self.top_agent.query(*args, **kwargs)
+        return self.vector_query_engine.query(*args, **kwargs)

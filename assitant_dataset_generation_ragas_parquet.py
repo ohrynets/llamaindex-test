@@ -25,6 +25,9 @@ import nltk
 import spacy
 from llama_index.llms.azure_openai import AzureOpenAI
 from ragas.run_config import RunConfig
+from llama_index.core.node_parser import MarkdownNodeParser
+from llama_index.core.schema import Document
+
 
 nltk.download('punkt_tab')
 spacy.cli.download("en_core_web_md")
@@ -38,7 +41,6 @@ def export_nodes(nodes, table_name:str):
     nodes_content = [n.text for n in nodes]
     # Create pandas dataframe from array of strings
     nodes_df = pd.DataFrame(nodes_content, columns=["text"])
-
     duckdb.sql(f"CREATE TABLE {table_name} AS SELECT * FROM nodes_df")
     duckdb.sql(f"COPY (SELECT * FROM {table_name}) TO '{table_name}.parquet' (FORMAT PARQUET)")
     
@@ -90,37 +92,23 @@ critic_llm = azurellm
 Settings.llm = azurellm
 Settings.embed_model = embed_model
 print(f"Folder with documents:{docs_store_path}")
-file_extractor={".pdf": PdfFileReader(pdf_images_path, page_chunks=True)}
+file_pages = 'kb_pages.parquet'
+kb_pages =  duckdb.sql(f"SELECT url, title, page_id, status, text FROM '{file_pages}'")
+documents = []
+for row in kb_pages.fetchall():
+    url = row[0]
+    title = row[1]
+    page_id = row[2]
+    status = row[3]
+    text = row[4]
+    doc = Document(text=text, id_=page_id, extra_info={"url": url, "title": title, "status": status})
+    documents.append(doc)
+#exit()
 #reader = SimpleDirectoryReader(input_dir=docs_store_path, num_files_limit=10, file_extractor=file_extractor)
-reader = SimpleDirectoryReader(input_dir=docs_store_path, num_files_limit=10, file_extractor=file_extractor)            
-documents = reader.load_data(show_progress=True)
 
 #Download model python3 -m spacy download en_core_web_md
-config = LanguageConfig(language="english", spacy_model="en_core_web_md")
-from llama_index.core.node_parser import SentenceSplitter
-parser = MarkdownNodeParser()
 
-markdown_pages = parser.get_nodes_from_documents(documents)
-
-sentence_splitter = SentenceSplitter(
-    chunk_size=2000,
-    chunk_overlap=200,
-)
-
-splitter = SemanticDoubleMergingSplitterNodeParser(
-    language_config=config,
-    initial_threshold=0.4,
-    appending_threshold=0.6,
-    merging_threshold=0.6,
-    max_chunk_size=3000,
-    merging_range=3,
-    splitter=[sentence_splitter]
-)
-nodes = splitter.get_nodes_from_documents(markdown_pages)
-#nodes = splitter.get_nodes_from_documents(documents)
-export_nodes(documents, "documents")
-export_nodes(markdown_pages, "markdown_pages")
-export_nodes(nodes, "nodes_text")
+export_nodes(documents, "documents_parquet")
 
 runConfig = RunConfig()
 runConfig.max_workers = 4
@@ -137,7 +125,7 @@ def generate_eval_test(nodes, evaluation_ds=evaluation_ds):
     runConfig2.max_workers = 4
     
     eval_testset = generator.generate_with_llamaindex_docs(
-        nodes,
+        documents=nodes,
         test_size=100,
         distributions={simple: 0.3, reasoning: 0.40, multi_context: 0.30},
         with_debugging_logs=True,
@@ -150,4 +138,4 @@ def generate_eval_test(nodes, evaluation_ds=evaluation_ds):
     duckdb.sql(f"COPY (SELECT * FROM eval_data) TO '{evaluation_ds}' (FORMAT PARQUET)")
     return eval_questions_df
 
-generated_quesries = generate_eval_test(nodes, evaluation_ds)
+generated_quesries = generate_eval_test(documents, evaluation_ds)

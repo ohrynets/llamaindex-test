@@ -23,6 +23,8 @@ from llama_index.core.prompts.system import MARKETING_WRITING_ASSISTANT
 from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core import ChatPromptTemplate
 from llama_index.postprocessor.colbert_rerank import ColbertRerank
+from llama_index.core.postprocessor import LLMRerank 
+from llama_index.core import QueryBundle
 
 from llama_index.core.agent import (
     StructuredPlannerAgent,
@@ -125,15 +127,18 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
             # save the initial index
             self.vector_index.storage_context.persist(persist_dir=storage_dir)
         
-        self.colbert_reranker = ColbertRerank(
-                                            top_n=5,
-                                            model="colbert-ir/colbertv2.0",
-                                            tokenizer="colbert-ir/colbertv2.0",
-                                            keep_retrieval_score=True,
-                                        )
+        self.reranker = LLMRerank(llm=self.main_llm, choice_batch_size=5, top_n=5)
+        # self.reranker = ColbertRerank(
+        #                                 top_n=5,
+        #                                 model="colbert-ir/colbertv2.0",
+        #                                 tokenizer="colbert-ir/colbertv2.0",
+        #                                 keep_retrieval_score=True,
+        #                             )
         
-        self.vector_query_engine = self.vector_index.as_query_engine(llm=agent_llm, similarity_top_k=10, )
-        #                                                                     node_postprocessors=[self.colbert_reranker])
+        self.vector_query_engine = self.vector_index.as_query_engine(llm=agent_llm, similarity_top_k=10)
+         
+        self.vector_query_engine_reranked = self.vector_index.as_query_engine(llm=agent_llm, similarity_top_k=10,
+                                                                             node_postprocessors=[self.reranker])
         query_engine_tools = [
                 QueryEngineTool (
                     query_engine=self.vector_query_engine,
@@ -200,7 +205,15 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         
         return vector_index
    
-
+    def query_index(self, query: str, top_k: int = 5):
+        return self.vector_query_engine.query(str)
+    
+    def query_rerank(self, query: str, top_k: int = 5):                
+        return self.vector_query_engine_reranked.query(query)
+    
+    def query_agent(self, query: str, top_k: int = 5):
+        return self.top_agent.query(query)
+    
     def process_documets(self, docs_store_path):
         file_extractor={".pdf": PdfFileReader(self.pdf_images_path)}
         #TDOD: Implement this method to process the documents
@@ -220,4 +233,6 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
     def run(self, *args: Any, **kwargs: Any) -> Any:
         """Run the pipeline."""
         #return self.top_agent.query(*args, **kwargs)
-        return self.vector_query_engine.query(*args, **kwargs)
+        #return self.vector_query_engine.query(*args, **kwargs)
+        result = self.query_rerank(args[0], top_k=5)
+        return result 

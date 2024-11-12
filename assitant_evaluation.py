@@ -14,13 +14,19 @@ import duckdb
 from deepeval.metrics import AnswerRelevancyMetric
 from deepeval.test_case import LLMTestCase
 from deepeval.dataset import EvaluationDataset, Golden
+from ragas.embeddings import LlamaIndexEmbeddingsWrapper
 from deepeval import assert_test
 from deepeval.models import DeepEvalBaseLLM
+from ragas.evaluation import Result
+from ragas.llms import LlamaIndexLLMWrapper
+from ragas.evaluation import evaluate as ragas_evaluate
+from llama_index.core.base.llms.base import BaseLLM
 
 from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
 from phoenix.otel import register
 import pandas as pd
 from llama_index.llms.azure_openai import AzureOpenAI
+from llama_index.core.llama_pack.base import BaseLlamaPack
 
 from datasets import Dataset 
 from ragas.metrics import (
@@ -64,6 +70,7 @@ azure_openai_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT','https://ai-proxy.lab.ep
 azure_openai_api_key=os.getenv('AZURE_OPENAI_API_KEY')
 azure_openai_model=os.getenv('AZURE_OPENAI_MODEL')
 evaluation_ds = os.getenv('EVALUATION_DS')
+evaluation_result = os.getenv('EVALUATION_RESULT')
 
 #Configure 
 session_id = str(uuid.uuid4())
@@ -85,8 +92,8 @@ tracer_provider = register(
   verbose=True,
 )
 
-LlamaIndexInstrumentor().instrument(tracer_provider=tracer_provider)
-Settings.callback_manager = CallbackManager([langfuse_callback_handler])
+#LlamaIndexInstrumentor().instrument(tracer_provider=tracer_provider)
+#Settings.callback_manager = CallbackManager([langfuse_callback_handler])
 print(f"Ollama Url: {ollama_base_url}")
 print(f"Langfuse Url: {langfuse_url}")
 ollama = Ollama(model="llama3.1:8b", request_timeout=120.0, base_url=ollama_base_url, 
@@ -108,73 +115,62 @@ import nest_asyncio
 
 nest_asyncio.apply()
 
-Settings.llm = ollama
+Settings.llm = azurellm
 Settings.embed_model = embed_model
 print(f"evaluation data:{evaluation_ds}")
     
-agent = ParquetDocumentAssistantAgentsPack(main_llm=ollama, agent_llm=ollama, 
+agent = ParquetDocumentAssistantAgentsPack(main_llm=azurellm, agent_llm=azurellm, 
                                          embeding_llm=embed_model, 
                                          docs_store_path=docs_store_path, 
                                          pdf_images_path=pdf_images_path,
                                          storage_dir=storage_dir, verbose=True, number_of_docs=1)
 
-eval_questions = duckdb.query(f"SELECT question, ground_truth FROM read_parquet('{evaluation_ds}')")
-questions = []
-ground_truth = []
-#answer_relevancy_metric = AnswerRelevancyMetric(model=azurellm, threshold=0.5)
-for row in eval_questions.fetchall():
-    question = row[0]
-    ground_truth = row[1]
-    print(f"Question: {question}")
+eval_questions = duckdb.query(f"SELECT question, ground_truth, contexts FROM read_parquet('{evaluation_ds}') LIMIT 100")
+
+
+def build_eval_dataset(agent: BaseLlamaPack, eval_questions):
+    session_id = str(uuid.uuid4())
+    agent_model = agent.get_modules()["main_llm"]
+    metadata = agent_model.to_dict()
+    queries = []
+    contexts = []
+    answers = []
+    ground_truths = []
     
-    response = agent.run(question)
-    
-    if response is not None:
-        actual_output = response.response
-        retrieval_context = [node.get_content() for node in response.source_nodes]
-        print(f"Response: {actual_output}")
-        print(f"Retrieval Context: {retrieval_context}")
+    for row in eval_questions.fetchall():
+        question = row[0]
+        ground_truth = row[1]
+        print(f"Question: {question}")
         print(f"Ground Truth: {ground_truth}")
-        # test_case = LLMTestCase(
-        #     input=question,
-        #     actual_output=actual_output,
-        #     retrieval_context=retrieval_context
-        # )
-        
-        #assert_test(test_case, [answer_relevancy_metric])
-    print("--------------------------------------------------")
+        try:
+            response = agent.run(question)
+            print(f"Response: {response}")
+            queries.append(question)            
+            context = [n.node.text for n in response.source_nodes]
+            contexts.append(context)
+            answers.append(response.response)
+            ground_truths.append(ground_truth)
+        except Exception as e:
+            response = None
+            print(f"Error processing question '{question}': {e}")
+        print("--------------------------------------------------")
 
-#print(answer_relevancy_metric)
-def evaluate_and_save(metrics, ollama, agent, eval_questions):
-    result = evaluate(
-        query_engine=agent.get_modules()["vector_index"].as_query_engine(),
-        metrics=metrics,
-        dataset=Dataset.from_pandas(eval_questions.to_df()),
-        llm=ollama,
-        embeddings=Settings.embed_model,
-    )
+    data = {
+        "question": queries,
+        "contexts": contexts,
+        "answer": answers,
+        "ground_truth": ground_truths,
+    }
+    eval_dataset = Dataset.from_dict(data)
+    return eval_dataset
 
-    eval_result_df = result.to_pandas()
-    duckdb.sql("CREATE TABLE eval_result AS SELECT * FROM eval_result_df")
-    duckdb.sql("INSERT INTO eval_result SELECT * FROM eval_result_df")
-    duckdb.sql("COPY (SELECT * FROM eval_result) TO 'eval_result.parquet' (FORMAT PARQUET)")
-    return result
+eval_dataset = build_eval_dataset(agent, eval_questions)
 
-evalation_result = evaluate_and_save(metrics, azurellm, agent, eval_questions)
-print(evalation_result)
+def evaluate_and_save(metrics, llm: BaseLLM, agent, eval_questions, eval_result_file: str)-> Result :
+    run_config = RunConfig()
+    run_config.max_workers = 4
 
-#client = px.Client()
-#spans_dataframe = get_qa_with_reference(client)
-# Assign span ids to your ragas evaluation scores (needed so Phoenix knows where to attach the spans).
-#print(spans_dataframe)
-    
-#response = agent.run("Give me the location of Homewood Suites by Hilton. Do not guess only use context.")
-#response = agent.run("Give me the address of Homewood Suites by Hilton where I was staying and you have an invoce from this hotel.")
-#response = agent.run("What is included in data quality management to ensure that data is fit for its intended uses?")
-#print(response)
-#response = agent.run("What are the key phases involved in the AI Product Life Cycle?")
-#response = agent.run("What action did not occur, instead of going to the store?")
-#response = agent.run("What genAI-enabled or -assisted experiences benefits will be delivered to enterprises according to Forester?")
-#print(response)
+
+#{'faithfulness': 0.7896, 'answer_relevancy': nan, 'context_precision': 0.7302, 'context_recall': 0.8025}
 
 

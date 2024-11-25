@@ -25,6 +25,7 @@ from llama_index.core import ChatPromptTemplate
 from llama_index.postprocessor.colbert_rerank import ColbertRerank
 from llama_index.core.postprocessor import LLMRerank 
 from llama_index.core import QueryBundle
+from llama_index.core.postprocessor import SimilarityPostprocessor
 
 from llama_index.core.agent import (
     StructuredPlannerAgent,
@@ -82,8 +83,6 @@ class PdfFileReader(BaseReader):
             nodes.append(doc)
         return nodes
 
-
-    
 class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
     """Multi-document Agents pack.
 
@@ -98,7 +97,8 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         storage_dir: str,
         pdf_images_path: str,
         verbose: bool = False,
-        number_of_files: int = None,        
+        number_of_files: int = None,   
+        similarity_cutoff: float = 0.65,     
         **kwargs: Any,
     ) -> None:
         """Init params."""
@@ -114,6 +114,8 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         self.agent_llm = agent_llm
         self.main_llm = main_llm
         self.number_of_files = number_of_files
+        self.similarity_cutoff = similarity_cutoff
+        self.agent_llm = agent_llm
         # this is for the baseline
         
         
@@ -127,18 +129,7 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
             # save the initial index
             self.vector_index.storage_context.persist(persist_dir=storage_dir)
         
-        self.reranker = LLMRerank(llm=self.main_llm, choice_batch_size=5, top_n=5)
-        # self.reranker = ColbertRerank(
-        #                                 top_n=5,
-        #                                 model="colbert-ir/colbertv2.0",
-        #                                 tokenizer="colbert-ir/colbertv2.0",
-        #                                 keep_retrieval_score=True,
-        #                             )
-        
-        self.vector_query_engine = self.vector_index.as_query_engine(llm=agent_llm, similarity_top_k=10)
-         
-        self.vector_query_engine_reranked = self.vector_index.as_query_engine(llm=agent_llm, similarity_top_k=10,
-                                                                             node_postprocessors=[self.reranker])
+        self.create_query_engine()
         query_engine_tools = [
                 QueryEngineTool (
                     query_engine=self.vector_query_engine,
@@ -164,6 +155,20 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
             )
         ]
         self.top_agent = self.main_agent.as_agent(chat_history=chat_history, verbose=self.verbose)
+
+    def create_query_engine(self):
+        self.reranker = LLMRerank(llm=self.main_llm, choice_batch_size=5, top_n=5)
+        self.reranker = ColbertRerank(
+                                        top_n=5,
+                                        model="colbert-ir/colbertv2.0",
+                                        tokenizer="colbert-ir/colbertv2.0",
+                                        keep_retrieval_score=True,
+                                    )
+        postprocessor = SimilarityPostprocessor(similarity_cutoff=self.similarity_cutoff)
+        self.vector_query_engine = self.vector_index.as_query_engine(llm=self.agent_llm, similarity_top_k=10, node_postprocessors=[postprocessor])
+         
+        self.vector_query_engine_reranked = self.vector_index.as_query_engine(llm=self.agent_llm, similarity_top_k=10,
+                                                                             node_postprocessors=[self.reranker, postprocessor])
 
     def build_index(self):        
         file_extractor={".pdf": PdfFileReader(self.pdf_images_path, page_chunks=self.page_chunks)}
@@ -235,4 +240,5 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         #return self.top_agent.query(*args, **kwargs)
         #return self.vector_query_engine.query(*args, **kwargs)
         result = self.query_rerank(args[0], top_k=5)
+        #result = self.query_index(args[0], top_k=5)
         return result 

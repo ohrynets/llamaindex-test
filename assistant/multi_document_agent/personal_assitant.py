@@ -26,6 +26,8 @@ from llama_index.postprocessor.colbert_rerank import ColbertRerank
 from llama_index.core.postprocessor import LLMRerank 
 from llama_index.core import QueryBundle
 from llama_index.core.postprocessor import SimilarityPostprocessor
+import boto3
+from requests_aws4auth import AWS4Auth
 
 from llama_index.core.agent import (
     StructuredPlannerAgent,
@@ -98,7 +100,8 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         pdf_images_path: str,
         verbose: bool = False,
         number_of_files: int = None,   
-        similarity_cutoff: float = 0.65,     
+        similarity_cutoff: float = 0.65,
+        load_data: bool = False,  
         **kwargs: Any,
     ) -> None:
         """Init params."""
@@ -116,18 +119,11 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         self.number_of_files = number_of_files
         self.similarity_cutoff = similarity_cutoff
         self.agent_llm = agent_llm
+        self.load_data = load_data
         # this is for the baseline
         
         
-        if os.path.exists(storage_dir):
-            self.vector_index = load_index_from_storage(
-                StorageContext.from_defaults(persist_dir=storage_dir)
-            )
-        else:
-            print(f"Folder with documents:{docs_store_path}. Loadding ...")
-            self.vector_index = self.build_index()
-            # save the initial index
-            self.vector_index.storage_context.persist(persist_dir=storage_dir)
+        self.initialize_vector_index(docs_store_path, storage_dir)
         
         self.create_query_engine()
         query_engine_tools = [
@@ -156,6 +152,19 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         ]
         self.top_agent = self.main_agent.as_agent(chat_history=chat_history, verbose=self.verbose)
 
+    def initialize_vector_index(self, docs_store_path, storage_dir, load_data=False):
+        if not load_data:
+            self.vector_index = load_index_from_storage(
+                StorageContext.from_defaults(persist_dir=storage_dir)
+            )
+        else:
+            print(f"Folder with documents:{docs_store_path}. Loadding ...")
+            self.vector_index = self.build_index()
+            # save the initial index
+            self.vector_index.storage_context.persist(persist_dir=storage_dir)
+
+    
+
     def create_query_engine(self):
         self.reranker = LLMRerank(llm=self.main_llm, choice_batch_size=5, top_n=5)
         self.reranker = ColbertRerank(
@@ -165,11 +174,14 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
                                         keep_retrieval_score=True,
                                     )
         postprocessor = SimilarityPostprocessor(similarity_cutoff=self.similarity_cutoff)
-        self.vector_query_engine = self.vector_index.as_query_engine(llm=self.agent_llm, similarity_top_k=10, node_postprocessors=[postprocessor])
+        #self.vector_query_engine = self.vector_index.as_query_engine(llm=self.agent_llm, similarity_top_k=10, node_postprocessors=[postprocessor])
+        self.vector_query_engine = self.vector_index.as_query_engine(llm=self.agent_llm, similarity_top_k=10, node_postprocessors=[])
          
         self.vector_query_engine_reranked = self.vector_index.as_query_engine(llm=self.agent_llm, similarity_top_k=10,
                                                                              node_postprocessors=[self.reranker, postprocessor])
 
+        return 
+    
     def build_index(self):        
         file_extractor={".pdf": PdfFileReader(self.pdf_images_path, page_chunks=self.page_chunks)}
         config = LanguageConfig(language="english", spacy_model="en_core_web_md")
@@ -211,7 +223,7 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         return vector_index
    
     def query_index(self, query: str, top_k: int = 5):
-        return self.vector_query_engine.query(str)
+        return self.vector_query_engine.query(query)
     
     def query_rerank(self, query: str, top_k: int = 5):                
         return self.vector_query_engine_reranked.query(query)
@@ -239,6 +251,6 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         """Run the pipeline."""
         #return self.top_agent.query(*args, **kwargs)
         #return self.vector_query_engine.query(*args, **kwargs)
-        result = self.query_rerank(args[0], top_k=5)
-        #result = self.query_index(args[0], top_k=5)
+        #result = self.query_rerank(args[0], top_k=5)
+        result = self.query_index(args[0], top_k=5)
         return result 

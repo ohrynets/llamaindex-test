@@ -1,0 +1,7 @@
+Your request violates one of our guardrails. 
+
+Violation Code: {code}
+Violation Name: {category}
+Violation Description: {description}
+
+Please review our guidelines and adjust your request accordingly.

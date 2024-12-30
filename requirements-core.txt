@@ -1,0 +1,17 @@
+python-dotenv
+llama-index-llms-ollama
+llama-index-embeddings-huggingface
+llama-index-readers-file
+pymupdf4llm
+llama-index-embeddings-ollama
+torch
+torchvision
+torchaudio
+open-clip-torch
+sentence-transformers
+pydantic
+langfuse
+arize-phoenix-otel
+pytesseract
+sentencepiece
+Pillow

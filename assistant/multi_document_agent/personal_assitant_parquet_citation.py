@@ -69,6 +69,8 @@ CITATION_QA_TEMPLATE_CUSTOM = PromptTemplate(
     "When referencing information from a source, "
     "cite the appropriate source(s) using their corresponding numbers. "
     "Every answer should include at least one source citation. "
+    "Don't merge information from multiple sources."
+    "Don't include any sources or quotes that contain harmfull content like hate speech, violence, etc."
     "Only cite a source when you are explicitly referencing it. "
     "Keep the original Markdown formating from the sources."
     "If none of the sources are helpful, you should indicate that. "
@@ -93,9 +95,13 @@ CITATION_REFINE_TEMPLATE_CUSTOM = PromptTemplate(
     "When referencing information from a source, "
     "cite the appropriate source(s) using their corresponding numbers. "
     "Every answer should include at least one source citation. "
-    "Please format the answer using Markdown formating preserving the original source Markdown tags."
     "Only cite a source when you are explicitly referencing it. "
     "If none of the sources are helpful, you should indicate that. "
+    "Don't merge information from multiple sources."
+    "Don't include any sources or quotes that contain harmfull content like hate speech, violence, etc."
+    "Keep the original Markdown formating from the sources."
+    "Don't include responses that are not directly related to the query."
+    "Please quote the original source text when providing an answer in quotes. "
     "For example:\n"
     "Source 1:\n"
     "The sky is red in the evening and blue in the morning.\n"
@@ -174,6 +180,7 @@ class CitationParquetDocumentAssistantAgentsPack(ParquetDocumentAssistantAgentsP
             citation_chunk_size=512,
             llm=self.agent_llm,  
             node_postprocessors=[postprocessor],
+            response_mode = ResponseMode.ACCUMULATE,
             citation_qa_template=CITATION_QA_TEMPLATE_CUSTOM,
             citation_refine_template=CITATION_REFINE_TEMPLATE_CUSTOM,
         )
@@ -182,10 +189,10 @@ class CitationParquetDocumentAssistantAgentsPack(ParquetDocumentAssistantAgentsP
             self.vector_index,
             similarity_top_k=2,
             # here we can control how granular citation sources are, the default is 512
-            citation_chunk_size=512,
+            citation_chunk_size=1024,
             llm=self.agent_llm,
             node_postprocessors=[self.reranker, postprocessor],
-            response_mode = ResponseMode.COMPACT,
+            response_mode = ResponseMode.COMPACT_ACCUMULATE,
             citation_qa_template=CITATION_QA_TEMPLATE_CUSTOM,
             citation_refine_template=CITATION_REFINE_TEMPLATE_CUSTOM,
             metadata_mode=MetadataMode.NONE

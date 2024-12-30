@@ -24,7 +24,12 @@ from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core import ChatPromptTemplate
 from llama_index.postprocessor.colbert_rerank import ColbertRerank
 from typing import Any, Callable, Dict, Generator, List, Optional, Set, Type, Union
-from assistant.multi_document_agent.personal_assitant import MultiDocumentAssistantAgentsPack
+from assistant.multi_document_agent.personal_assitant_parquet import ParquetDocumentAssistantAgentsPack, ParquetFileReader
+from llama_index.core.postprocessor import LLMRerank 
+
+from llama_index.core.postprocessor import SimilarityPostprocessor
+from llama_index.core.query_engine import CitationQueryEngine
+from llama_index.core.base.response.schema import RESPONSE_TYPE
 
 from llama_index.core.agent import (
     StructuredPlannerAgent,
@@ -49,32 +54,21 @@ from llama_index.core.node_parser import (
     SemanticDoubleMergingSplitterNodeParser,
     LanguageConfig,
 )
-
+from llama_index.core.response_synthesizers import ( 
+    ResponseMode,
+)
+from llama_index.core.schema import (
+    MetadataMode,
+)
+from llama_index.core.prompts import PromptTemplate
 import uuid
 import duckdb
+import boto3
+from requests_aws4auth import AWS4Auth
+from opensearchpy import RequestsHttpConnection
+from llama_index.vector_stores.opensearch import OpensearchVectorStore, OpensearchVectorClient
 
-
-class ParquetFileReader(BaseReader):
-    def __init__(self, text_field: str = "text", id_field : str = "page_id", metadata_schema: tuple = None):       
-       self.text_field = text_field
-       self.id_field = id_field
-       self.metadata_schema = metadata_schema
-       
-    def load_data(self, file, extra_info={}):
-        metada_fields = ",".join([f'"{r}" := {r}' for r in self.metadata_schema])
-        records = duckdb.query(f"SELECT {self.text_field}, {self.id_field}, struct_pack({metada_fields}) FROM read_parquet('{file}')")
-        # load_data returns a list of Document objects
-        nodes = []
-        for row in records.fetchall():
-            metadata = row[2]
-            doc = Document(text=row[0], id_=row[1], extra_info={**extra_info, **metadata})
-            nodes.append(doc)
-        return nodes
-
-
-
-    
-class ParquetDocumentAssistantAgentsPack(MultiDocumentAssistantAgentsPack):
+class OpensearchParquetDocumentAssistantAgentsPack(ParquetDocumentAssistantAgentsPack):
     """Multi-document Agents pack.
             main_llm=azurellm, agent_llm=azurellm, 
             embeding_llm=embed_model, 
@@ -96,13 +90,19 @@ class ParquetDocumentAssistantAgentsPack(MultiDocumentAssistantAgentsPack):
         text_field = "text", 
         id_field = "page_id", 
         metadata_schema = ("url", "title", "status"),
+        opensearch_endpoint : str = None,
+        embedding_field: str = None,
+        index_name: str = None,
         load_data: bool = True,
         **kwargs: Any,
     ) -> None:
         self.text_field = text_field
         self.id_field = id_field
         self.metadata_schema = metadata_schema
-
+        self.opensearch_endpoint = opensearch_endpoint
+        self.embedding_field = embedding_field
+        self.index_name = index_name
+        self.load_data = load_data
         super().__init__(
                 main_llm,
                 agent_llm,
@@ -115,8 +115,26 @@ class ParquetDocumentAssistantAgentsPack(MultiDocumentAssistantAgentsPack):
                 load_data=load_data,
                 **kwargs)        
     
-    def build_index(self):
+    def initialize_vector_index(self, docs_store_path, storage_dir, load_data=False):
+        self._init_awsauth()
+        client = OpensearchVectorClient(
+            self.opensearch_endpoint, self.index_name, 1024, embedding_field=self.embedding_field, text_field=self.text_field,
+            http_auth=self.awsauth, use_ssl=True,
+            verify_certs=True, connection_class=RequestsHttpConnection,
+            settings={"index.number_of_shards": 2}
+        )
+        # initialize vector store
+        self.vector_store = OpensearchVectorStore(client)
+        self.storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
         
+        if load_data:
+            self.vector_index = self.build_index()       
+            self.vector_index.storage_context.persist()
+        else:
+            self.vector_index = VectorStoreIndex.from_vector_store(self.vector_store, embed_model = self.embed_model)   
+            
+
+    def build_index(self):
         file_extractor={".parquet": ParquetFileReader(text_field=self.text_field, id_field=self.id_field, metadata_schema=self.metadata_schema)}                
         reader = SimpleDirectoryReader(input_dir=self.docs_store_path, num_files_limit=self.number_of_files, file_extractor=file_extractor)        
         
@@ -125,5 +143,15 @@ class ParquetDocumentAssistantAgentsPack(MultiDocumentAssistantAgentsPack):
         transformations=[   
                 self.embed_model
             ]
-        vector_index = VectorStoreIndex.from_documents(documents=documents, transformations=transformations, show_progress=True)
-        return vector_index
+        return VectorStoreIndex.from_documents(documents=documents, storage_context=self.storage_context, transformations=transformations, show_progress=True)    
+    
+    def delete_index(index_name, endpoint):
+        delete_url = f'{endpoint}/{index_name}'
+        response = requests.delete(delete_url, auth=self.awsauth, headers=headers)
+    
+    def _init_awsauth(self) -> None:
+        region_name=os.environ['AWS_REGION']
+        client = boto3.client("opensearch", region_name=region_name)
+        client_credentials = client._get_credentials()
+        self.credentials = client_credentials.get_frozen_credentials()        
+        self.awsauth = AWS4Auth(self.credentials.access_key, self.credentials.secret_key, region_name, "es", session_token=self.credentials.token)

@@ -25,10 +25,7 @@ from llama_index.core import ChatPromptTemplate
 from llama_index.postprocessor.colbert_rerank import ColbertRerank
 from llama_index.core.postprocessor import LLMRerank 
 from llama_index.core import QueryBundle
-from llama_index.core.response_synthesizers import ResponseMode
-from llama_index.core.query_engine import CitationQueryEngine
-from llama_index.core.selectors import LLMSingleSelector
-from llama_index.core.query_engine import RouterQueryEngine
+from llama_index.core.postprocessor import SimilarityPostprocessor
 
 from llama_index.core.agent import (
     StructuredPlannerAgent,
@@ -107,50 +104,6 @@ class PdfFileReader(BaseReader):
             nodes.append(doc)
         return nodes
 
-class DocklingFileReader(BaseReader):
-    def __init__(self, pdf_images_path: str, page_chunks: bool = False):
-       self.pdf_images_path = pdf_images_path
-       self.page_chunks = page_chunks
-       
-    def load_data(self, file, extra_info={}):
-        #md_content = pymupdf4llm.to_markdown(file, write_images=True, page_chunks=self.page_chunks, image_path=self.pdf_images_path)
-        # load_data returns a list of Document objects
-        reader = DoclingReader()
-
-        md_content = reader.load_data(file)
-        nodes = []
-        if self.page_chunks:
-            for d in md_content:
-                # res = mrkdown_parser.aget_nodes_from_documents(d)
-                # for n in res:
-                    # print(n)
-                doc_id = f"{d['metadata']['title']}:{d['metadata']['page']}"
-                doc = Document(text=d['text'], id_=doc_id, extra_info={**extra_info, **d['metadata']})
-                nodes.append(doc)
-        else:
-            doc_id = f"{file}"
-            doc = Document(text=md_content, id_=doc_id)                
-            nodes.append(doc)
-        return nodes
-
-direct_llm_prompt = (
-    "Given the user query, respond as best as possible following this guidelines:\n"
-    "- If the intent of the user is to get information about the abilities of the AI, respond with: "
-    "This assistant can answer questions, generate text, summarize documents, and more. \n"
-    "- If the intent of the user is harmful. Respond with: I cannot help with that. \n"
-    "- If the intent of the user is to get information outside of the context given, respond with: "
-    "I cannot help with that. Please ask something that is relevant with the documents in the context givem. \n"
-    "Query: {query}")
-def get_weather(location: str = Field(
-            description="A city name and state, formatted like '<name>, <state>'"
-        ),) -> str:
-        """Usfeful for getting the weather for a given location."""
-        return f"The weather in {location} is sunny."
-
-def custom_handle_reasoning_failure(callback_manager, exception):
-    # Custom logic to handle reasoning failure
-    return ToolOutput(content="Partial response due to reasoning failure.")
-
 class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
     """Multi-document Agents pack.
 
@@ -165,8 +118,8 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         storage_dir: str,
         pdf_images_path: str,
         verbose: bool = False,
-        number_of_files: int = None,
-        page_chunks: bool = False,        
+        number_of_files: int = None,   
+        similarity_cutoff: float = 0.65,     
         **kwargs: Any,
     ) -> None:
         """Init params."""
@@ -182,7 +135,8 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         self.agent_llm = agent_llm
         self.main_llm = main_llm
         self.number_of_files = number_of_files
-        self.page_chunks = page_chunks
+        self.similarity_cutoff = similarity_cutoff
+        self.agent_llm = agent_llm
         # this is for the baseline
         self.vector_index: VectorStoreIndex = None
         
@@ -196,28 +150,48 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
             # save the initial index
             self.vector_index.storage_context.persist(persist_dir=storage_dir)
         
+        self.create_query_engine()
+        query_engine_tools = [
+                QueryEngineTool (
+                    query_engine=self.vector_query_engine,
+                    metadata=ToolMetadata(
+                        name="vector_tool",
+                        description="Useful to answer question based on relevant documents. ",
+                    )
+                )
+        ] 
+
+        self.tool_interactive_reflection_agent_worker = FunctionCallingAgentWorker.from_tools(
+            tools=query_engine_tools, llm=agent_llm, verbose=self.verbose
+        )
+        
+        self.main_agent = ReActAgentWorker.from_tools(tools=query_engine_tools, llm=main_llm,
+             verbose=self.verbose
+        )
+
+        chat_history = [
+            ChatMessage(
+                content="You are an assistant that generates answer based on documents. Please provide the answer in John Cleese style.",
+                role=MessageRole.SYSTEM,
+            )
+        ]
+        self.top_agent = self.main_agent.as_agent(chat_history=chat_history, verbose=self.verbose)
+
+    def create_query_engine(self):
         self.reranker = LLMRerank(llm=self.main_llm, choice_batch_size=5, top_n=5)
-        # self.reranker = ColbertRerank(
-        #                                 top_n=5,
-        #                                 model="colbert-ir/colbertv2.0",
-        #                                 tokenizer="colbert-ir/colbertv2.0",
-        #                                 keep_retrieval_score=True,
-        #                             )
+        self.reranker = ColbertRerank(
+                                        top_n=5,
+                                        model="colbert-ir/colbertv2.0",
+                                        tokenizer="colbert-ir/colbertv2.0",
+                                        keep_retrieval_score=True,
+                                    )
+        postprocessor = SimilarityPostprocessor(similarity_cutoff=self.similarity_cutoff)
+        self.vector_query_engine = self.vector_index.as_query_engine(llm=self.agent_llm, similarity_top_k=10, node_postprocessors=[postprocessor])
+         
+        self.vector_query_engine_reranked = self.vector_index.as_query_engine(llm=self.agent_llm, similarity_top_k=10,
+                                                                             node_postprocessors=[self.reranker, postprocessor])
 
-        self.vector_query_engine = CitationQueryEngine.from_args(self.vector_index, llm=agent_llm, similarity_top_k=4, citation_chunk_size=512,)
-        # self.vector_query_engine = self.vector_index.as_query_engine(llm=agent_llm, similarity_top_k=4,
-        #         response_synthesizer_mode=ResponseMode.REFINE,)
-        self.vector_query_engine_reranked = CitationQueryEngine.from_args(self.vector_index, llm=agent_llm, similarity_top_k=4, citation_chunk_size=512, node_postprocessors=[self.reranker]) 
-        # self.vector_query_engine_reranked = self.vector_index.as_query_engine(llm=agent_llm, similarity_top_k=10,
-        #                                                                      node_postprocessors=[self.reranker])
-        self.build_query_tool()
-        self.build_query_router()
-        self.initialize_main_agent()
-
-    def build_index(self) -> VectorStoreIndex:       
-        nltk.download('punkt_tab')
-        spacy.cli.download("en_core_web_md")
-
+    def build_index(self):        
         file_extractor={".pdf": PdfFileReader(self.pdf_images_path, page_chunks=self.page_chunks)}
         #file_extractor={".pdf": DoclingReader()}
         config = LanguageConfig(language="english", spacy_model="en_core_web_md")
@@ -353,8 +327,6 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         """Run the pipeline."""
         #return self.top_agent.query(*args, **kwargs)
         #return self.vector_query_engine.query(*args, **kwargs)
-        query: str = args[0]
-        print(f"Query: {query}")
-        #result = self.query_index(query, top_k=5)
-        result = self.query_agent(query, top_k=5)
+        result = self.query_rerank(args[0], top_k=5)
+        #result = self.query_index(args[0], top_k=5)
         return result 

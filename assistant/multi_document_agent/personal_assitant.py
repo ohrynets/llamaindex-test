@@ -64,7 +64,14 @@ import uuid
 from llama_index.core.query_engine import CustomQueryEngine
 from llama_index.core.tools import QueryEngineTool
 from llama_index.core import DocumentSummaryIndex
-
+from llama_index.core.tools import FunctionTool
+from pydantic import Field
+from llama_index.core.tools.types import (
+    AsyncBaseTool,
+    BaseTool,
+    ToolMetadata,
+    ToolOutput,
+)
 
 class LlmQueryEngine(CustomQueryEngine):
     """Custom query engine for direct calls to the LLM model."""
@@ -134,6 +141,15 @@ direct_llm_prompt = (
     "- If the intent of the user is to get information outside of the context given, respond with: "
     "I cannot help with that. Please ask something that is relevant with the documents in the context givem. \n"
     "Query: {query}")
+def get_weather(location: str = Field(
+            description="A city name and state, formatted like '<name>, <state>'"
+        ),) -> str:
+        """Usfeful for getting the weather for a given location."""
+        return f"The weather in {location} is sunny."
+
+def custom_handle_reasoning_failure(callback_manager, exception):
+    # Custom logic to handle reasoning failure
+    return ToolOutput(content="Partial response due to reasoning failure.")
 
 class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
     """Multi-document Agents pack.
@@ -196,6 +212,7 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         #                                                                      node_postprocessors=[self.reranker])
         self.build_query_tool()
         self.build_query_router()
+        self.initialize_main_agent()
 
     def build_index(self) -> VectorStoreIndex:       
         nltk.download('punkt_tab')
@@ -255,8 +272,18 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         self.llm_query_engine = LlmQueryEngine(
             llm=self.main_llm, prompt=direct_llm_prompt)
         
-
     def build_query_router(self):
+        
+        self.llm_tool = QueryEngineTool.from_defaults(
+            query_engine=self.llm_query_engine,
+            name="llm_query_tool",
+            description=(
+                "Useful for when the INTENT of the user isnt clear, is broad, "
+                "or when the user is asking general questions that have nothing "
+                "to do with data-intensive application. Use this tool when the other tool is not useful."
+                "Provide a clarifying question to the user to get more context."
+            ), 
+        )
         self.llm_tool = QueryEngineTool.from_defaults(
             query_engine=self.llm_query_engine,
             name="llm_query_tool",
@@ -285,6 +312,15 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
                 self.vector_tool,
             ], verbose = self.verbose
         )
+    
+    def initialize_main_agent(self):
+        self.weather_tool = FunctionTool.from_defaults(get_weather, name="weather_getting_tool", 
+                                                  description="Usfeful for getting the weather for a given location.")
+        self.query_tool = QueryEngineTool.from_defaults(self.router_query_engine, name="query_tool", 
+                                                  description="Usfeful for running any quersions related to available context and user query clarification.")
+        self.main_agent = ReActAgent.from_tools(
+            [self.weather_tool, self.query_tool], 
+            verbose=self.verbose, max_iterations=2, handle_reasoning_failure_fn=custom_handle_reasoning_failure)
         
     def query_index(self, query: str, top_k: int = 5):
         response = self.vector_query_engine.query(query)
@@ -295,7 +331,7 @@ class MultiDocumentAssistantAgentsPack(BaseLlamaPack):
         return self.vector_query_engine_reranked.query(query)
     
     def query_agent(self, query: str, top_k: int = 5):
-        return self.router_query_engine.query(query)
+        return self.main_agent.query(query)
     
     def process_documets(self, docs_store_path):
         file_extractor={".pdf": PdfFileReader(self.pdf_images_path)}

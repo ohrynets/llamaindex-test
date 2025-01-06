@@ -62,6 +62,10 @@ async def main():
     result = agent.run("Could you help me explaining the weather patterns?")
     print(result)
     print("========================================")
+    result = agent.run("What is the current weather in London?")
+    print(result)
+    print("========================================")
+
     
 if __name__ == "__main__":
     import asyncio
